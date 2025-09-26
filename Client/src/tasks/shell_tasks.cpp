@@ -1,10 +1,10 @@
 #include "shell_tasks.h"
-#include "../config/config.h"
+#include "../core/config.h"
 #include "../utils/system_info.h"
 
 #include <windows.h>
 #include <direct.h>
-#include <TlHelp32.h>
+#include <tlhelp32.h>
 #include <sstream>
 #include <iomanip>
 #include <iostream>
@@ -286,13 +286,13 @@ namespace Shell {
             return "";
         }
 
-        DWORD bufferSize = GetEnvironmentVariableA(varName.c_str(), NULL, 0);
+        DWORD bufferSize = ::GetEnvironmentVariableA(varName.c_str(), NULL, 0);
         if (bufferSize == 0) {
             return ""; // Variable not found
         }
 
         std::vector<char> buffer(bufferSize);
-        DWORD result = GetEnvironmentVariableA(varName.c_str(), buffer.data(), bufferSize);
+        DWORD result = ::GetEnvironmentVariableA(varName.c_str(), buffer.data(), bufferSize);
         
         if (result == 0 || result >= bufferSize) {
             return "";

@@ -1,5 +1,5 @@
 #include "system_info.h"
-#include "../config/config.h"
+#include "../core/config.h"
 
 #include <windows.h>
 #include <winreg.h>
@@ -13,6 +13,7 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
+#include <cstdint>
 
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "netapi32.lib")
@@ -20,6 +21,15 @@
 
 namespace Utils {
 namespace SystemInfo {
+
+    static std::string WideToNarrow(const WCHAR* wstr) {
+        if (!wstr) return "";
+        int size = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
+        if (size <= 0) return "";
+        std::string result(size - 1, 0);
+        WideCharToMultiByte(CP_UTF8, 0, wstr, -1, &result[0], size, nullptr, nullptr);
+        return result;
+    }
 
     std::string GetUsername() {
         char username[MAX_COMPUTERNAME_LENGTH + 1] = { 0 };
@@ -170,7 +180,7 @@ namespace SystemInfo {
             for (PIP_ADAPTER_ADDRESSES curr = pAddresses; curr; curr = curr->Next) {
                 NetworkAdapter adapter;
                 adapter.name = curr->AdapterName;
-                adapter.description = curr->Description;
+                adapter.description = WideToNarrow(curr->Description);
                 adapter.isUp = (curr->OperStatus == IfOperStatusUp);
                 
                 // Get MAC address
@@ -546,17 +556,17 @@ namespace SystemInfo {
         return drives;
     }
 
-    std::string GetWindowsDirectory() {
+    std::string GetWindowsDir() {
         char winDir[MAX_PATH];
-        if (GetWindowsDirectoryA(winDir, MAX_PATH)) {
+        if (::GetWindowsDirectoryA(winDir, MAX_PATH)) {
             return std::string(winDir);
         }
         return "C:\\Windows";
     }
 
-    std::string GetSystemDirectory() {
+    std::string GetSystemDir() {
         char sysDir[MAX_PATH];
-        if (GetSystemDirectoryA(sysDir, MAX_PATH)) {
+        if (::GetSystemDirectoryA(sysDir, MAX_PATH)) {
             return std::string(sysDir);
         }
         return "C:\\Windows\\System32";

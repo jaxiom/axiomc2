@@ -1,5 +1,5 @@
 #include "priv_tasks.h"
-#include "../config/config.h"
+#include "../core/config.h"
 #include "../utils/encoding.h"
 #include "../tasks/file_tasks.h"
 #include "../tasks/injection_tasks.h"

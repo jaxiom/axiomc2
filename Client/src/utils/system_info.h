@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <windows.h>
+#include <cstdint>
 
 namespace Utils {
 namespace SystemInfo {

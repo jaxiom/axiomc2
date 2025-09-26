@@ -13,10 +13,10 @@ namespace Privilege {
     // Privilege escalation method enumeration
     enum class EscalationMethod {
         FODHELPER_UAC_BYPASS = 1,
-        NAMED_PIPE_IMPERSONATION = 1,  // For getsystem
         TOKEN_DUPLICATION = 2,
         SERVICE_CREATION = 3,
-        REGISTRY_HIJACK = 4
+        REGISTRY_HIJACK = 4,
+        NAMED_PIPE_IMPERSONATION = 5
     };
 
     // Privilege operation result structure

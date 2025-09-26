@@ -1,5 +1,5 @@
 #include "encoding.h"
-#include "../config/config.h"
+#include "../core/config.h"
 
 #include <windows.h>
 #include <vector>

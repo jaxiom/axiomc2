@@ -1,5 +1,5 @@
 #include "agent.h"
-#include "../config/config.h"
+#include "config.h"
 #include "../utils/encoding.h"
 #include "../utils/system_info.h"
 #include "../utils/anti_debug.h"
@@ -168,7 +168,7 @@ namespace Agent {
         }
     }
 
-    std::string GetAgentId() {
+    std::string GetId() {
         return g_agent_id;
     }
 

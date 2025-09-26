@@ -1,11 +1,11 @@
 #include "injection_tasks.h"
-#include "../config/config.h"
+#include "../core/config.h"
 #include "../utils/encoding.h"
 #include "../core/communication.h"
 #include "../tasks/file_tasks.h"
 
 #include <windows.h>
-#include <TlHelp32.h>
+#include <tlhelp32.h>
 #include <psapi.h>
 #include <iostream>
 #include <algorithm>

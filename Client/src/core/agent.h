@@ -39,7 +39,7 @@ namespace Agent {
      * Get the current agent ID
      * @return Agent ID string, empty if not registered
      */
-    std::string GetAgentId();
+    std::string GetId();
 
     /**
      * Set the agent ID (used during registration)

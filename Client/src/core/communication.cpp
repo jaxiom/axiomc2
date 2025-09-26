@@ -1,5 +1,5 @@
 #include "communication.h"
-#include "../config/config.h"
+#include "config.h"
 #include "../utils/encoding.h"
 
 #include <winsock2.h>

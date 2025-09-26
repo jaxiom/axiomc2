@@ -1,5 +1,5 @@
 #include "anti_debug.h"
-#include "../config/config.h"
+#include "../core/config.h"
 
 #include <windows.h>
 #include <winternl.h>
@@ -10,15 +10,33 @@
 #include <sstream>
 #include <algorithm>
 
+// For MinGW compatibility
+#ifndef _MSC_VER
+#define PROCESSENTRY32A PROCESSENTRY32W
+#define Process32FirstA Process32FirstW
+#define Process32NextA Process32NextW
+#define MODULEENTRY32A MODULEENTRY32W
+#define Module32FirstA Module32FirstW
+#define Module32NextA Module32NextW
+#endif
+
 namespace Utils {
 namespace AntiDebug {
+
+    std::string WideToNarrow(const WCHAR* wstr) {
+        if (!wstr) return "";
+        int size = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
+        if (size <= 0) return "";
+        std::string result(size - 1, 0);
+        WideCharToMultiByte(CP_UTF8, 0, wstr, -1, &result[0], size, nullptr, nullptr);
+        return result;
+    }
 
     bool IsDebuggerPresent_API() {
         return ::IsDebuggerPresent() != FALSE;
     }
 
     bool IsDebuggerPresent_PEB() {
-        // Access the Process Environment Block (PEB) to check BeingDebugged flag
         return ::IsDebuggerPresent() != FALSE;
     }
 
@@ -54,25 +72,30 @@ namespace AntiDebug {
     }
 
     bool CheckDebuggerTimestamp() {
-        LARGE_INTEGER start, end, freq;
-        QueryPerformanceCounter(&start);
+        #ifdef _MSC_VER
+            LARGE_INTEGER start, end, freq;
+            QueryPerformanceCounter(&start);
 
-        // Execute an instruction that is captured by debuggers
-        __try {
-            OutputDebugStringA("Anti-Debug Check");
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER) {
-            // Exception occurred
-        }
+            // Execute an instruction that is captured by debuggers
+            __try {
+                OutputDebugStringA("Anti-Debug Check");
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {
+                // Exception occurred
+            }
 
-        QueryPerformanceCounter(&end);
-        QueryPerformanceFrequency(&freq);
+            QueryPerformanceCounter(&end);
+            QueryPerformanceFrequency(&freq);
 
-        // Calculate time in microseconds
-        double time = ((double)(end.QuadPart - start.QuadPart) * 1000000.0) / (double)freq.QuadPart;
+            // Calculate time in microseconds
+            double time = ((double)(end.QuadPart - start.QuadPart) * 1000000.0) / (double)freq.QuadPart;
 
-        // If time exceeds threshold, likely debugged
-        return time > 100.0; // 100 microseconds threshold
+            // If time exceeds threshold, likely debugged
+            return time > 100.0; // 100 microseconds threshold
+        #else
+            // GCC/MinGW doesn't support SEH - disable this check
+            return false;
+        #endif
     }
 
     bool CheckRemoteDebugger() {
@@ -108,7 +131,7 @@ namespace AntiDebug {
 
         if (Process32FirstA(hSnapshot, &pe32)) {
             do {
-                std::string processName(pe32.szExeFile);
+                std::string processName = WideToNarrow(pe32.szExeFile);
                 std::transform(processName.begin(), processName.end(), processName.begin(), ::tolower);
 
                 for (const auto& debugger : debuggerProcesses) {
@@ -208,7 +231,7 @@ namespace AntiDebug {
 
             if (Process32FirstA(hSnapshot, &pe32)) {
                 do {
-                    std::string processName(pe32.szExeFile);
+                    std::string processName = WideToNarrow(pe32.szExeFile);
                     std::transform(processName.begin(), processName.end(), processName.begin(), ::tolower);
 
                     for (const auto& artifact : vmArtifacts) {
@@ -343,17 +366,22 @@ namespace AntiDebug {
     }
 
     bool CheckDebuggerByException() {
-        __try {
-            // Generate an exception
-            RaiseException(0x40000015, 0, 0, NULL);
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER) {
-            // If we reach here, no debugger is handling the exception
+        #ifdef _MSC_VER
+            __try {
+                // Generate an exception
+                RaiseException(0x40000015, 0, 0, NULL);
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {
+                // If we reach here, no debugger is handling the exception
+                return false;
+            }
+            
+            // If we reach here, a debugger might be present
+            return true;
+        #else
+            // GCC/MinGW doesn't support SEH - disable this check
             return false;
-        }
-        
-        // If we reach here, a debugger might be present
-        return true;
+        #endif
     }
 
     bool CheckSuspiciousDLLs() {
@@ -371,13 +399,13 @@ namespace AntiDebug {
 
         if (Module32FirstA(hSnapshot, &me32)) {
             do {
-                std::string moduleName(me32.szModule);
+                std::string moduleName = WideToNarrow(me32.szModule);
                 std::transform(moduleName.begin(), moduleName.end(), moduleName.begin(), ::tolower);
 
                 for (const auto& suspiciousDLL : suspiciousDLLs) {
                     if (moduleName == suspiciousDLL) {
                         // Check if this DLL was loaded by us or externally
-                        HMODULE hMod = GetModuleHandleA(me32.szModule);
+                        HMODULE hMod = GetModuleHandleW(me32.szModule);
                         if (hMod && hMod != me32.hModule) {
                             CloseHandle(hSnapshot);
                             PRINTF("[DEBUG] Suspicious DLL injection detected: %s\n", me32.szModule);

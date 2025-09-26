@@ -1,13 +1,15 @@
 #include "system_tasks.h"
-#include "../config/config.h"
+#include "../core/config.h"
 #include "../utils/encoding.h"
 #include "../tasks/file_tasks.h"
 
+#include <winsock2.h>
 #include <windows.h>
 #include <winreg.h>
 #include <winsvc.h>
 #include <psapi.h>
 #include <iphlpapi.h>
+#include <ws2tcpip.h>
 #include <iostream>
 #include <sstream>
 #include <iomanip>
@@ -591,7 +593,7 @@ namespace System {
             return false;
         }
         
-        BOOL result = ClearEventLogA(hEventLog, NULL);
+        BOOL result = ::ClearEventLogA(hEventLog, NULL);
         CloseEventLog(hEventLog);
         
         return result != FALSE;

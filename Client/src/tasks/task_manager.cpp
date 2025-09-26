@@ -1,12 +1,12 @@
 #include "task_manager.h"
-#include "../config/config.h"
+#include "../core/config.h"
 #include "../utils/encoding.h"
 #include "../utils/system_info.h"
 #include "../core/communication.h"
 
 #include <windows.h>
 #include <direct.h>
-#include <TlHelp32.h>
+#include <tlhelp32.h>
 #include <sstream>
 #include <iomanip>
 #include <iostream>

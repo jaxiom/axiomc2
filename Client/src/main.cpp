@@ -4,7 +4,7 @@
 #define no_init_all
 #define _CRT_SECURE_NO_WARNINGS
 
-#include "config/config.h"
+#include "core/config.h"
 #include "core/agent.h"
 #include "core/communication.h"
 #include "utils/anti_debug.h"

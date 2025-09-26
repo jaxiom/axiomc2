@@ -419,7 +419,7 @@ BOOL loadDll(const std::string& mydll, HMODULE* hModule)
     {
         printf("[+] %s is a DLL, attempting to convert\n",mydll.c_str());
 
-        if (!ConvertToShellcode(data, dataSize, HashFunctionName(""), "", 0, SRDI_CLEARHEADER, finalShellcode, finalSize)) 
+        if (!ConvertToShellcode(data, dataSize, HashFunctionName(""), (LPVOID)"", 0, SRDI_CLEARHEADER, finalShellcode, finalSize))
         {
             printf("[!] Failed to convert DLL\n");
             return FALSE;
@@ -481,7 +481,7 @@ int load_execute_dll(std::string dllpath, std::string func, std::wstring input, 
         printf("failed to load DLL\n");
         return -1;
     }
-    void* fn = GetProcAddressR(hDLL, func.c_str());
+    void* fn = (void*)GetProcAddressR(hDLL, func.c_str());
 
     if (fn != nullptr)
     {

