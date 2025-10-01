@@ -1,3 +1,3 @@
 cd cli
-py .\cli.py
+python .\cli.py
 cd ..\

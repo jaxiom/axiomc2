@@ -6195,7 +6195,7 @@ namespace nlohmann
 			{
 				return errored;
 			}
-			
+
 		private:
 			/*!
 			@invariant If the ref stack is empty, then the passed value will be the new

@@ -12,10 +12,6 @@
 #include <string>
 #include <iostream>
 #include <regex>
-#include <fstream>
-#include <vector>
-#include <wincrypt.h>
-#pragma comment(lib, "Crypt32.lib")
 
 #include <shellapi.h>
 // ref: https://docs.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-commandlinetoargvw
@@ -38,24 +34,6 @@
 std::string do_replace(std::string const & in, std::string const & from, std::string const & to)
 {
     return std::regex_replace(in, std::regex(from), to);
-}
-
-bool SaveBase64PngToFile(const char* b64, const std::string& filename)
-{
-	DWORD decodedLen = 0;
-	if (!CryptStringToBinaryA(b64, 0, CRYPT_STRING_BASE64, NULL, &decodedLen, NULL, NULL))
-		return false;
-
-	std::vector<BYTE> decoded(decodedLen);
-	if (!CryptStringToBinaryA(b64, 0, CRYPT_STRING_BASE64, decoded.data(), &decodedLen, NULL, NULL))
-		return false;
-
-	std::ofstream fout(filename, std::ios::binary);
-	if (!fout) return false;
-	fout.write(reinterpret_cast<const char*>(decoded.data()), decoded.size());
-	fout.close();
-
-	return true;
 }
 
 std::string GetBinFolder()
@@ -546,13 +524,27 @@ int exec_load_execute_dll(std::string myDLL, std::wstring args)
 int load_execute_listprivs(const std::string bin_folder)
 {
 #ifdef _WIN64
-    std::string myDLL = bin_folder + "GDI-ScreenShot.dll";
+    std::string myDLL = bin_folder + "listprivs_x64.dll";
 #else
-    std::string myDLL = bin_folder + "GDI-ScreenShot.dll";
+    std::string myDLL = bin_folder + "listprivs_x86.dll";
 #endif
 
     std::wstring wout = L"";
-    load_execute_dll(myDLL, "Screenshot", L"", &wout);
+    load_execute_dll(myDLL, "ExecuteW", L"", &wout);
+
+    return 0;
+}
+
+int load_execute_setpriv(const std::string bin_folder)
+{
+#ifdef _WIN64
+    std::string myDLL = bin_folder + "setpriv_x64.dll";
+#else
+    std::string myDLL = bin_folder + "setpriv_x86.dll";
+#endif
+
+    std::wstring wout = L"";
+    load_execute_dll(myDLL, "ExecuteW", L"SeChangeNotifyPrivilege disabled", &wout);
 
     return 0;
 }
@@ -644,6 +636,8 @@ int wmain(int argc, wchar_t *argv[])
     load_execute_mkdir(bin_folder); //
     
     //--------------------------------
+    load_execute_listprivs(bin_folder);
+    load_execute_setpriv(bin_folder); 
     load_execute_listprivs(bin_folder);
     
     return 0;
