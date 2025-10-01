@@ -50,3 +50,12 @@ Agent Interaction Commands:
 ## Client
 
 To configure the client, change the SERVER_IP and PORT variables to be the server's IP and port. Then, run the compile.bat script. This will compile the client in release mode. Alternatively, compile the client in debug mode for verbose information.
+
+## Future Work
+
+Planned Features:
+- Upload files to client
+- Easier client management
+- GUI
+- Direct powershell integration
+- Screenshot ability
